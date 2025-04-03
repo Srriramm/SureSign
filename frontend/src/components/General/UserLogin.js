@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import './SellerLogin.css';
+import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
+import './UserLogin.css';
 
-function SellerLogin() {
+function UserLogin() {
+  const { userType } = useParams(); // Get user type from URL
   const [formData, setFormData] = useState({
     email: '',
     password: ''
@@ -10,6 +11,10 @@ function SellerLogin() {
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Check if we were redirected from a protected route
+  const from = location.state?.from?.pathname || null;
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -43,6 +48,7 @@ function SellerLogin() {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
+    // Validate form fields
     if (!validateForm()) {
       return;
     }
@@ -50,54 +56,73 @@ function SellerLogin() {
     setLoading(true);
 
     try {
-      // In a real app, this would be an API call to authenticate
-      // For demo purposes, we'll simulate a login check
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Create FormData to match backend route
+      const formDataToSend = new FormData();
+      formDataToSend.append('email', formData.email);
+      formDataToSend.append('password', formData.password);
 
-      // Mock authentication logic
-      // In a real app, you would verify credentials against a backend
-      const mockUsers = JSON.parse(localStorage.getItem('sellers') || '[]');
-      const user = mockUsers.find(user => user.email === formData.email);
+      // Send login request to the backend
+      const response = await fetch(`http://localhost:8000/auth/login/${userType}`, {
+        method: 'POST',
+        body: formDataToSend
+      });
 
-      if (user && user.password === formData.password) {
-        // Store user info in localStorage (in a real app, store a token)
-        localStorage.setItem('currentSellerId', user.id);
-        localStorage.setItem('sellerName', user.name);
-        localStorage.setItem('sellerEmail', user.email);
+      // Parse the response
+      const data = await response.json();
 
-        // Navigate to list properties page
-        navigate('/list-properties');
-      } else {
-        setErrors({
-          auth: "Invalid email or password"
-        });
+      // Handle errors from the backend
+      if (!response.ok) {
+        throw new Error(data.detail || 'Login failed');
       }
+
+      // Store the token in localStorage
+      localStorage.setItem('token', data.access_token);
+
+      // Store user information in localStorage
+      localStorage.setItem('userId', data.user_id);
+      localStorage.setItem('userEmail', formData.email);
+      localStorage.setItem('userType', userType);
+
+      // If we have a previous location, navigate back to it
+      if (from) {
+        navigate(from, { replace: true });
+      } else {
+        // Otherwise, navigate based on user type
+        const navigationRoutes = {
+          'seller': '/list-properties',
+          'buyer': '/property-listings'
+        };
+        navigate(navigationRoutes[userType] || '/dashboard');
+      }
+
     } catch (error) {
-      console.error('Login error:', error);
+      // Set error message for display
       setErrors({
-        auth: "An error occurred during login. Please try again."
+        auth: error.message || "An error occurred during login. Please try again.",
       });
     } finally {
+      // Ensure loading state is reset
       setLoading(false);
     }
   };
 
   return (
-    <div className="seller-login">
-      <div className="gov-banner">Government of India</div>
-
+    <div className="user-login">
       <header>
         <div className="container">
-          <div className="logo-placeholder">Logo</div>
-          <h1 className="header-title">SELLER LOGIN</h1>
-          <p className="header-subtitle">Ministry of Housing and Urban Affairs</p>
+        <img src="/assets/Blue Modern Technology Company Logo (1).png" alt="SureSign Logo" className="login-logo-image" />
+          <h1 className="login-header-title">{userType.toUpperCase()} LOGIN</h1>
         </div>
       </header>
 
       <main className="container">
         <div className="login-card">
-          <h2>Login to Your Seller Account</h2>
-          <p className="form-subtitle">Access your property listings and manage your profile</p>
+          <h2>Login to Your {userType.charAt(0).toUpperCase() + userType.slice(1)} Account</h2>
+          <p className="form-subtitle">
+            {userType === 'seller' 
+              ? 'Access your property listings and manage your profile'
+              : 'Browse and explore available properties'}
+          </p>
 
           {errors.auth && (
             <div className="auth-error">
@@ -137,7 +162,7 @@ function SellerLogin() {
                 <label className="remember-me">
                   <input type="checkbox" /> Remember me
                 </label>
-                <Link to="/seller-forgot-password" className="forgot-password">
+                <Link to="/forgot-password" className="forgot-password">
                   Forgot Password?
                 </Link>
               </div>
@@ -154,8 +179,8 @@ function SellerLogin() {
 
           <div className="register-prompt">
             <p>Don't have an account?</p>
-            <Link to="/seller-registration" className="btn btn-secondary btn-register">
-              Register as a Seller
+            <Link to={`/register/${userType}`} className="btn btn-secondary btn-register">
+              Register as a {userType.charAt(0).toUpperCase() + userType.slice(1)}
             </Link>
           </div>
         </div>
@@ -164,11 +189,10 @@ function SellerLogin() {
       <footer>
         <div className="container">
           <p>&copy; 2025 Online Property Registration Portal. All Rights Reserved.</p>
-          <p>Government of India</p>
         </div>
       </footer>
     </div>
   );
 }
 
-export default SellerLogin;
+export default UserLogin;

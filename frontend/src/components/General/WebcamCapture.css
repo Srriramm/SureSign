@@ -1,0 +1,72 @@
+.webcam-container {
+  position: relative;
+  width: 400px;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.webcam {
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.webcam-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: none;
+}
+
+.face-outline {
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  border: 3px dashed white;
+  box-shadow: 0 0 0 1000px rgba(0, 0, 0, 0.4);
+}
+
+.capture-instructions {
+  text-align: center;
+  margin-top: 15px;
+}
+
+.capture-instructions p {
+  margin-bottom: 10px;
+  color: #444;
+}
+
+.capture-button {
+  background-color: #0d4ea1;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.captured-image-container {
+  text-align: center;
+}
+
+.captured-image {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+.retake-button {
+  background-color: #f5f5f5;
+  color: #333;
+  border: 1px solid #ddd;
+  padding: 10px 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+  margin-top: 15px;
+}

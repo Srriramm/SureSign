@@ -1,0 +1,61 @@
+# System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor directories and files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Security and secrets
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+secrets.json
+credentials.json
+*config.json
+*credentials*
+
+# Log files
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+*.tmp
+*.temp
+.cache
+tmp/
+temp/
+
+# Sensitive documentation or data
+docs/private/
+*private*/
+*sensitive*/
+
+# Local development files
+.local/
+.settings/
+.project
+.classpath
+
+# Blockchain/web3 related
+wallet.json
+private_key.json
+contracts/build/
+node_modules/ 

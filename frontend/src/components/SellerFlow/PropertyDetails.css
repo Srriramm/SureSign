@@ -1,0 +1,489 @@
+.property-details-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.property-details-page header {
+  background-color: #1e40af;
+  padding: 0;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  border-bottom: 1px solid #eee;
+  width: 100%;
+}
+
+.property-details-page .header-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0;
+  position: relative;
+  height: 60px;
+}
+
+.header-left {
+  position: relative;
+  left: 0;
+  display: flex;
+  align-items: center;
+  z-index: 10;
+  padding-left: 1rem;
+}
+
+.header-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-center h1 {
+  font-size: 1.5rem;
+  margin: 0;
+  color: white;
+  font-weight: 600;
+  text-align: center;
+}
+
+.header-right {
+  position: relative;
+  right: 0;
+}
+
+/* Main content layout */
+.property-details-page main {
+  padding-top: 2rem;
+  padding-bottom: 3rem;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* Property content replaces property-details-container */
+.property-content {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+  margin-bottom: 2rem;
+  padding: 0 1rem;
+}
+
+@media (min-width: 768px) {
+  .property-content {
+    grid-template-columns: 1fr 1fr; /* Equal 50/50 split */
+    max-width: 100%;
+    gap: 2rem;
+  }
+}
+
+@media (min-width: 992px) {
+  .property-content {
+    grid-template-columns: 420px 1fr;
+    gap: 2.5rem;
+  }
+}
+
+@media (min-width: 1400px) {
+  .property-content {
+    grid-template-columns: 500px 1fr;
+    gap: 3rem;
+  }
+}
+
+/* Remove back button section as it's no longer needed */
+.back-button-section {
+  display: none;
+}
+
+/* Images section should be reduced to match main image */
+.property-images-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  align-items: center;
+  width: 85%;
+  max-width: 85%;
+  margin: 0 auto;
+}
+
+/* Main image container should be slightly smaller */
+.main-image-container {
+  width: 85%;
+  height: auto;
+  aspect-ratio: 4/3; /* Maintain 4:3 ratio */
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+  position: relative;
+  margin: 0 auto;
+}
+
+.main-image-container::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: #f0f0f0;
+  z-index: -1;
+}
+
+.main-property-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.3s ease;
+}
+
+.main-property-image:hover {
+  transform: scale(1.05);
+}
+
+.main-property-image[src="/placeholder.jpg"],
+.thumbnail img[src="/placeholder.jpg"] {
+  object-fit: contain;
+  background-color: #f5f5f5;
+  padding: 20px;
+  opacity: 0.7;
+}
+
+.main-property-image,
+.thumbnail img {
+  transition: opacity 0.3s ease;
+}
+
+/* Thumbnail gallery should match the main image width */
+.thumbnail-gallery {
+  width: 85%;
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+  justify-content: center;
+  margin-top: 1rem;
+  max-width: 85%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.thumbnail {
+  width: 60px;
+  height: 45px; /* 4:3 ratio */
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.thumbnail.selected {
+  border-color: #007bff;
+}
+
+.thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+@media (min-width: 992px) {
+  .thumbnail-gallery {
+    gap: 0.75rem;
+  }
+
+  .thumbnail {
+    width: calc(20% - 0.75rem);
+    max-width: 100px;
+    height: auto;
+    aspect-ratio: 4/3;
+  }
+}
+
+@media (min-width: 1400px) {
+  .property-content {
+    grid-template-columns: 1fr 1fr;
+    gap: 3rem;
+  }
+}
+
+.property-info-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  width: 100%;
+  height: 100%;
+}
+
+.property-info-section h2 {
+  margin: 0;
+  font-size: 1.8rem;
+  color: #333;
+}
+
+.property-reference {
+  font-size: 0.9rem;
+  color: #666;
+  margin-top: -1rem;
+}
+
+.property-details-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.property-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.property-detail-item.full-width {
+  grid-column: 1 / -1;
+}
+
+.detail-label {
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.detail-value {
+  font-size: 1.1rem;
+  font-weight: 500;
+  color: #333;
+}
+
+.description {
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.property-documents {
+  margin-top: 1rem;
+}
+
+.property-documents h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1.3rem;
+}
+
+.documents-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.document-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem;
+  border-radius: 8px;
+  background-color: #f8f9fa;
+  text-decoration: none;
+  color: inherit;
+  transition: background-color 0.2s ease;
+}
+
+.document-item:hover {
+  background-color: #e9ecef;
+}
+
+.document-icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+}
+
+.document-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.document-title {
+  font-weight: 500;
+}
+
+.document-filename {
+  font-size: 0.9rem;
+  color: #666;
+  word-break: break-all;
+}
+
+.property-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.status-label {
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.status-badge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  background-color: #e9ecef;
+}
+
+.status-badge.live {
+  background-color: #d4edda;
+  color: #155724;
+}
+
+.status-badge.pending {
+  background-color: #fff3cd;
+  color: #856404;
+}
+
+.status-badge.sold {
+  background-color: #f8d7da;
+  color: #721c24;
+}
+
+.property-timestamp {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.timestamp-label {
+  color: #666;
+}
+
+.timestamp-value {
+  color: #333;
+}
+
+/* Update footer for full width */
+.property-details-page footer {
+  margin-top: auto;
+  background-color: #f5f5f5;
+  border-top: 1px solid #eee;
+  padding: 1.5rem 0;
+  text-align: center;
+  color: #666;
+  width: 100%;
+}
+
+.property-details-page footer .container {
+  max-width: 100%;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+@media (max-width: 767px) {
+  .property-content {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+  
+  .property-details-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .header-center {
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+  }
+  
+  .header-center h1 {
+    font-size: 1.2rem;
+  }
+}
+
+.header-left .logo-image {
+  height: 40px;
+  width: auto;
+}
+
+/* Full width container */
+.container.full-width {
+  max-width: 100%;
+  width: 100%;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+/* Header full width container - no padding */
+.header-container.full-width {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* Media queries for main image container - remove these */
+@media (min-width: 992px) {
+  .main-image-container {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 4/3;
+  }
+}
+
+@media (min-width: 1400px) {
+  .main-image-container {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 4/3;
+  }
+}
+
+@media (max-width: 600px) {
+  .header-center h1 {
+    font-size: 1.1rem;
+  }
+  
+  .header-left .logo-image {
+    height: 32px;
+  }
+}
+
+@media (max-width: 480px) {
+  .header-left {
+    gap: 0.5rem;
+  }
+  
+  .header-center h1 {
+    font-size: 0.9rem;
+    white-space: nowrap;
+  }
+  
+  .header-left .logo-image {
+    height: 28px;
+  }
+  
+  .property-details-page .header-container {
+    height: 50px;
+  }
+}
+
+@media (max-width: 375px) {
+  .header-left {
+    gap: 0.3rem;
+  }
+  
+  .header-left .logo-image {
+    height: 24px;
+  }
+  
+  .header-center h1 {
+    font-size: 0.8rem;
+  }
+} 
