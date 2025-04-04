@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
+import { storeAuthData } from '../../utils/authUtils';
 import './UserLogin.css';
 
 function UserLogin() {
@@ -75,13 +76,12 @@ function UserLogin() {
         throw new Error(data.detail || 'Login failed');
       }
 
-      // Store the token in localStorage
-      localStorage.setItem('token', data.access_token);
-
-      // Store user information in localStorage
-      localStorage.setItem('userId', data.user_id);
-      localStorage.setItem('userEmail', formData.email);
-      localStorage.setItem('userType', userType);
+      // Store auth data using our utilities
+      storeAuthData(userType, {
+        access_token: data.access_token,
+        user_id: data.user_id,
+        email: formData.email
+      });
 
       // If we have a previous location, navigate back to it
       if (from) {
@@ -90,7 +90,7 @@ function UserLogin() {
         // Otherwise, navigate based on user type
         const navigationRoutes = {
           'seller': '/list-properties',
-          'buyer': '/property-listings'
+          'buyer': '/buyer-dashboard'
         };
         navigate(navigationRoutes[userType] || '/dashboard');
       }
@@ -180,7 +180,7 @@ function UserLogin() {
           <div className="register-prompt">
             <p>Don't have an account?</p>
             <Link to={`/register/${userType}`} className="btn btn-secondary btn-register">
-              Register as a {userType.charAt(0).toUpperCase() + userType.slice(1)}
+              Register as a {userType === 'seller' ? 'Property Seller' : 'Property Buyer'}
             </Link>
           </div>
         </div>

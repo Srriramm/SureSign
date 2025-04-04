@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
 from typing import List, Optional
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid  # Added for generating unique IDs
 import logging
 from azure.core.exceptions import AzureError
@@ -130,9 +130,10 @@ class PropertyListingController:
 
     async def upload_property_documents(self, seller_id: str, documents: List[UploadFile], document_types: List[str]):
         """
-        Upload and encrypt property documents to Azure Blob Storage
+        Upload property documents to Azure Blob Storage with blockchain verification
+        but without encryption for common document formats to ensure readability
         """
-        encrypted_document_urls = []
+        document_urls = []
         document_hashes = []
         
         try:
@@ -144,36 +145,57 @@ class PropertyListingController:
                 # Read document file
                 doc_content = await doc.read()
                 
-                # Encrypt document
-                encrypted_content = self.file_encryptor.encrypt_data(doc_content)
+                # Calculate document hash for blockchain verification 
+                # (do this before any modifications to the content)
+                document_hash = self.file_encryptor.hash_data(doc_content)
+                
+                # Determine if this document should be encrypted
+                # Common document formats (Word, PDF, etc.) should not be encrypted
+                # as it prevents them from being opened directly
+                should_encrypt = False
+                filename_lower = doc.filename.lower()
+                
+                # Do not encrypt document formats that need to be directly readable
+                if not (filename_lower.endswith('.doc') or 
+                        filename_lower.endswith('.docx') or 
+                        filename_lower.endswith('.pdf') or 
+                        filename_lower.endswith('.txt')):
+                    # Only encrypt non-standard document formats
+                    should_encrypt = True
+                
+                # Process document content
+                processed_content = doc_content
+                if should_encrypt:
+                    # If encryption is needed, encrypt the document
+                    processed_content = self.file_encryptor.encrypt_data(doc_content)
+                    logging.info(f"Document {doc.filename} was encrypted before upload")
+                else:
+                    logging.info(f"Document {doc.filename} was stored without encryption for readability")
                 
                 # Generate unique filename
                 filename = f"{seller_id}_{datetime.now().timestamp()}_{doc.filename}"
                 
                 # Upload to Azure Blob Storage (property_documents container)
-                # Note: This now returns a SAS URL
                 blob_url = await self.azure_storage.upload_file(
                     container_name=self.azure_storage.container_property_docs, 
                     file_name=filename, 
-                    file_content=encrypted_content
+                    file_content=processed_content  # This is either encrypted or original content
                 )
                 
-                # Calculate document hash
-                document_hash = self.file_encryptor.hash_data(doc_content)
-                
-                # Store hash on blockchain
+                # Store hash on blockchain for verification
                 blockchain_tx_hash = await self.blockchain_service.store_document_hash(document_hash)
                 
-                encrypted_document_urls.append({
+                document_urls.append({
                     'url': blob_url,
                     'type': doc_type,
                     'filename': filename,
-                    'blockchain_tx_hash': blockchain_tx_hash
+                    'blockchain_tx_hash': blockchain_tx_hash,
+                    'encrypted': should_encrypt  # Add flag to indicate if document is encrypted
                 })
                 
                 document_hashes.append(document_hash)
             
-            return encrypted_document_urls, document_hashes
+            return document_urls, document_hashes
         finally:
             # Ensure we close the Azure storage client after all operations
             if hasattr(self, 'azure_storage') and self.azure_storage is not None:
@@ -204,7 +226,7 @@ class PropertyListingController:
             )
             
             # Upload documents
-            encrypted_document_urls, document_hashes = await self.upload_property_documents(
+            document_urls, document_hashes = await self.upload_property_documents(
                 token_payload['sub'], 
                 documents,
                 document_types
@@ -224,7 +246,7 @@ class PropertyListingController:
                 'description': description,
                 'location': location,
                 'images': encrypted_image_urls,
-                'documents': encrypted_document_urls,
+                'documents': document_urls,
                 'document_hashes': document_hashes,
                 'created_at': datetime.utcnow(),
                 'updated_at': datetime.utcnow(),
@@ -308,12 +330,12 @@ class PropertyListingController:
                 if len(documents) != len(document_types):
                     raise HTTPException(status_code=400, detail="Number of documents must match document types")
                     
-                encrypted_document_urls, document_hashes = await self.upload_property_documents(
+                document_urls, document_hashes = await self.upload_property_documents(
                     token_payload['sub'],
                     documents,
                     document_types
                 )
-                update_fields['documents'] = encrypted_document_urls
+                update_fields['documents'] = document_urls
                 update_fields['document_hashes'] = document_hashes
             
             # Add timestamp
@@ -378,6 +400,13 @@ class PropertyListingController:
         Upload additional documents for an existing property
         """
         try:
+            # Ensure documents and types match
+            if len(documents) != len(document_types):
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Number of documents must match document types"
+                )
+                
             # Find the property and validate ownership
             db = await get_database()
             properties_collection = db['properties']
@@ -388,59 +417,45 @@ class PropertyListingController:
             })
             
             if not property_doc:
-                raise HTTPException(status_code=404, detail="Property not found or you don't have permission")
-            
-            # Validate input
-            if len(documents) != len(document_types):
-                raise HTTPException(status_code=400, detail="Number of documents must match number of document types")
+                raise HTTPException(
+                    status_code=404, 
+                    detail="Property not found or you don't have permission"
+                )
             
             # Upload new documents
-            encrypted_document_urls, document_hashes = await self.upload_property_documents(
+            document_urls, document_hashes = await self.upload_property_documents(
                 token_payload['sub'],
                 documents,
                 document_types
             )
             
-            # Get existing documents
+            # Update the property with new documents
             existing_documents = property_doc.get('documents', [])
             existing_hashes = property_doc.get('document_hashes', [])
             
-            # Combine existing and new documents
-            updated_documents = existing_documents + encrypted_document_urls
-            updated_hashes = existing_hashes + document_hashes
-            
-            # Update property with new document arrays
+            # Add new documents and hashes
             result = await properties_collection.update_one(
-                {
-                    'id': property_id,
-                    'seller_id': token_payload['sub']
-                },
+                {'id': property_id, 'seller_id': token_payload['sub']},
                 {
                     '$set': {
-                        'documents': updated_documents,
-                        'document_hashes': updated_hashes,
                         'updated_at': datetime.utcnow()
+                    },
+                    '$push': {
+                        'documents': {'$each': document_urls},
+                        'document_hashes': {'$each': document_hashes}
                     }
                 }
             )
             
             if result.modified_count == 0:
-                raise HTTPException(status_code=500, detail="Failed to update property documents")
-            
-            # Get updated property
-            updated_property = await properties_collection.find_one({
-                'id': property_id,
-                'seller_id': token_payload['sub']
-            })
-            
-            # Convert MongoDB ObjectId to string
-            if '_id' in updated_property:
-                updated_property['_id'] = str(updated_property['_id'])
+                raise HTTPException(
+                    status_code=500, 
+                    detail="Failed to update property with new documents"
+                )
             
             return {
-                "message": "Documents added successfully",
-                "property": updated_property,
-                "added_documents": encrypted_document_urls
+                "message": "Documents uploaded successfully",
+                "added_documents": len(document_urls)
             }
         finally:
             # Ensure we close the Azure storage client after all operations
@@ -608,13 +623,74 @@ class DocumentAccessController:
             'seller_id': token_payload['sub']
         }).to_list(length=None)
         
+        # Enrich requests with property and buyer information
+        for request in requests:
+            if '_id' in request:
+                request['id'] = str(request['_id'])
+                del request['_id']
+                
+            # Get property information
+            if 'property_id' in request:
+                property_doc = await db['properties'].find_one({'id': request['property_id']})
+                if property_doc:
+                    request['property_location'] = property_doc.get('location') or property_doc.get('area', 'Unknown location')
+                    request['property_reference'] = property_doc.get('reference_number') or property_doc.get('id')
+            
+            # Get buyer information
+            if 'buyer_id' in request:
+                buyer_doc = await db['buyers'].find_one({'_id': ObjectId(request['buyer_id'])})
+                if buyer_doc:
+                    request['buyer_name'] = buyer_doc.get('name', 'Unknown buyer')
+                    request['buyer_email'] = buyer_doc.get('email', '')
+        
         return requests
+
+    async def get_request_details(self, token_payload, request_id):
+        """
+        Get detailed information about a specific document request
+        """
+        db = await get_database()
+        document_requests_collection = db['document_requests']
+        
+        # Find the document request
+        request = await document_requests_collection.find_one({
+            '_id': ObjectId(request_id),
+            'seller_id': token_payload['sub']
+        })
+        
+        if not request:
+            raise HTTPException(status_code=404, detail="Document request not found")
+        
+        # Convert ObjectId to string
+        request['id'] = str(request['_id'])
+        del request['_id']
+        
+        # Get property information
+        if 'property_id' in request:
+            property_doc = await db['properties'].find_one({'id': request['property_id']})
+            if property_doc:
+                request['property_location'] = property_doc.get('location') or property_doc.get('area', 'Unknown location')
+                request['property_reference'] = property_doc.get('reference_number') or property_doc.get('id')
+                request['property_type'] = property_doc.get('property_type', 'Unknown type')
+                request['property_price'] = property_doc.get('price', 0)
+        
+        # Get buyer information
+        if 'buyer_id' in request:
+            buyer_doc = await db['buyers'].find_one({'_id': ObjectId(request['buyer_id'])})
+            if buyer_doc:
+                request['buyer_name'] = buyer_doc.get('name', 'Unknown buyer')
+                request['buyer_email'] = buyer_doc.get('email', '')
+                request['buyer_phone'] = buyer_doc.get('mobile_number', '')
+        
+        return request
 
     async def handle_document_request(
         self, 
         token_payload: dict, 
         request_id: str, 
-        status: str
+        status: str,
+        rejection_reason: Optional[str] = None,
+        expiry_days: Optional[int] = 7
     ):
         """
         Approve or reject a document access request
@@ -626,24 +702,45 @@ class DocumentAccessController:
         db = await get_database()
         document_requests_collection = db['document_requests']
         
+        # Get the request to check it exists and belongs to this seller
+        request = await document_requests_collection.find_one({
+            '_id': ObjectId(request_id),
+            'seller_id': token_payload['sub']
+        })
+        
+        if not request:
+            raise HTTPException(status_code=404, detail="Document request not found")
+        
+        # Prepare the update data
+        update_data = {
+            'status': status,
+            'updated_at': datetime.utcnow()
+        }
+        
+        if status == 'approved':
+            # Set expiry date if approved
+            update_data['approved_at'] = datetime.utcnow()
+            update_data['expiry_date'] = datetime.utcnow() + timedelta(days=expiry_days)
+        elif status == 'rejected':
+            # Set rejection reason if rejected
+            update_data['rejected_at'] = datetime.utcnow()
+            update_data['rejection_reason'] = rejection_reason
+        
         # Update document request status
         result = await document_requests_collection.update_one(
-            {
-                '_id': ObjectId(request_id),
-                'seller_id': token_payload['sub']
-            },
-            {
-                '$set': {
-                    'status': status,
-                    'updated_at': datetime.utcnow()
-                }
-            }
+            {'_id': ObjectId(request_id)},
+            {'$set': update_data}
         )
         
         if result.modified_count == 0:
-            raise HTTPException(status_code=404, detail="Document request not found")
+            raise HTTPException(status_code=500, detail="Failed to update document request")
+        
+        # Get the updated document request
+        updated_request = await document_requests_collection.find_one({'_id': ObjectId(request_id)})
+        updated_request['id'] = str(updated_request['_id'])
+        del updated_request['_id']
         
         return {
             "message": f"Document request {status} successfully", 
-            "request_id": request_id
+            "request": updated_request
         }

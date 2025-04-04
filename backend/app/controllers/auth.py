@@ -186,6 +186,7 @@ class AuthController:
             user_id = str(result.inserted_id)
             
             # Upload selfie to Azure Storage
+            upload_result = None  # Initialize upload_result
             if selfie:
                 # Read selfie file
                 selfie_content = await selfie.read()
@@ -199,10 +200,15 @@ class AuthController:
                     "upload_timestamp": str(datetime.now().timestamp())
                 }
                 
+                # Generate a secure filename
+                timestamp = datetime.now().timestamp()
+                file_extension = selfie.filename.split('.')[-1] if '.' in selfie.filename else 'jpg'
+                secure_filename = f"{user_type}_{user_id}_{timestamp}_selfie.{file_extension}"
+                
                 # Upload to Azure Blob Storage with enhanced security
                 upload_result = await azure_storage.upload_file(
                     container_name=USER_SELFIES_CONTAINER,
-                    file_name=selfie.filename,
+                    file_name=secure_filename,
                     file_content=selfie_content,
                     content_type=selfie.content_type,
                     metadata=metadata
@@ -226,7 +232,7 @@ class AuthController:
             
             return {
                 "user_id": user_id, 
-                "selfie_url": upload_result["direct_url"] if 'upload_result' in locals() else None,
+                "selfie_url": upload_result["direct_url"] if upload_result else None,
                 "message": f"{user_type.capitalize()} registration completed successfully"
             }
         

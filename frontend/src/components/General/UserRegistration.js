@@ -73,7 +73,7 @@ function UserRegistration({ userType }) {
       if (response.ok) {
         alert('Registration successful!');
         // Navigate based on user type
-        navigate(userType === 'seller' ? '/list-properties' : '/dashboard');
+        navigate(userType === 'seller' ? '/list-properties' : '/buyer-dashboard');
         return true;
       } else {
         const errorMessage = data.detail || 'Registration failed';

@@ -1,17 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { getToken } from '../../utils/authUtils';
 import './ListProperties.css';
 
 function ListProperties() {
   const [sellerData, setSellerData] = useState(null);
   const [properties, setProperties] = useState([]);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showRequestsMenu, setShowRequestsMenu] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selfieUrl, setSelfieUrl] = useState(null);
   const [selfieLoading, setSelfieLoading] = useState(true);
+  const [documentRequests, setDocumentRequests] = useState([]);
+  const [requestsLoading, setRequestsLoading] = useState(false);
+  const [notification, setNotification] = useState(null);
   const profileRef = useRef(null);
+  const requestsRef = useRef(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -19,6 +25,9 @@ function ListProperties() {
     function handleClickOutside(event) {
       if (profileRef.current && !profileRef.current.contains(event.target)) {
         setShowProfileMenu(false);
+      }
+      if (requestsRef.current && !requestsRef.current.contains(event.target)) {
+        setShowRequestsMenu(false);
       }
     }
 
@@ -32,8 +41,10 @@ function ListProperties() {
 
   // Helper function to fetch images with token
   const fetchImageWithToken = async (url) => {
-    const token = localStorage.getItem('token');
     try {
+      const token = getToken('seller');
+      if (!token) return null;
+      
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -60,7 +71,7 @@ function ListProperties() {
     setSelfieLoading(true);
     
     try {
-      const token = localStorage.getItem('token');
+      const token = getToken('seller');
       
       // First get the seller data to access the actual filename
       const sellerResponse = await fetch('http://localhost:8000/seller/get-seller', {
@@ -107,9 +118,9 @@ function ListProperties() {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const token = localStorage.getItem('token');
+        const token = getToken('seller');
         if (!token) {
-          navigate('/login');
+          navigate('/login/seller');
           return;
         }
 
@@ -153,6 +164,10 @@ function ListProperties() {
         }
         
         setProperties(propsData);
+        
+        // Fetch document requests
+        fetchDocumentRequests();
+        
         setLoading(false);
       } catch (err) {
         console.error('Error fetching data:', err);
@@ -163,22 +178,166 @@ function ListProperties() {
     
     fetchData();
   }, [navigate]);
+  
+  const fetchDocumentRequests = async () => {
+    try {
+      setRequestsLoading(true);
+      const token = getToken('seller');
+      if (!token) return;
+      
+      const response = await fetch('http://localhost:8000/seller/document-requests', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch document requests');
+      }
+      
+      const data = await response.json();
+      console.log('Document requests:', data);
+      
+      // Transform the data to include property details
+      if (Array.isArray(data)) {
+        const transformedRequests = await Promise.all(data.map(async (request) => {
+          // Fetch property details if not included
+          if (!request.property_details && request.property_id) {
+            try {
+              const propertyResponse = await fetch(`http://localhost:8000/seller/property/${request.property_id}`, {
+                headers: {
+                  'Authorization': `Bearer ${token}`
+                }
+              });
+              
+              if (propertyResponse.ok) {
+                const propertyData = await propertyResponse.json();
+                request.property_details = propertyData;
+              }
+            } catch (error) {
+              console.error('Error fetching property details for request:', error);
+            }
+          }
+          
+          // Fetch buyer details if not included
+          if (!request.buyer_details && request.buyer_id) {
+            try {
+              const buyerResponse = await fetch(`http://localhost:8000/seller/buyer/${request.buyer_id}`, {
+                headers: {
+                  'Authorization': `Bearer ${token}`
+                }
+              });
+              
+              if (buyerResponse.ok) {
+                const buyerData = await buyerResponse.json();
+                request.buyer_details = buyerData;
+              }
+            } catch (error) {
+              console.error('Error fetching buyer details for request:', error);
+            }
+          }
+          
+          return request;
+        }));
+        
+        setDocumentRequests(transformedRequests);
+      } else {
+        setDocumentRequests([]);
+      }
+    } catch (err) {
+      console.error('Error fetching document requests:', err);
+    } finally {
+      setRequestsLoading(false);
+    }
+  };
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user_type');
+    localStorage.removeItem('buyer_token');
+    localStorage.removeItem('seller_token');
+    localStorage.removeItem('userType');
     navigate('/login');
   };
 
   const toggleProfileMenu = () => {
     setShowProfileMenu(!showProfileMenu);
   };
+  
+  const toggleRequestsMenu = () => {
+    setShowRequestsMenu(!showRequestsMenu);
+  };
 
   const handleEditProfile = () => {
     navigate('/edit-profile');
   };
-
-  const handleViewPropertyDetails = (propertyId) => {
+  
+  const handleUpdateRequestStatus = async (requestId, newStatus) => {
+    try {
+      const token = getToken('seller');
+      if (!token) {
+        console.error('No seller token found');
+        return;
+      }
+      
+      console.log(`Updating request ${requestId} status to ${newStatus}`);
+      
+      const response = await fetch(`http://localhost:8000/seller/document-requests/${requestId}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ 
+          status: newStatus,
+          expiry_days: 7
+        })
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Error response:', errorText);
+        throw new Error('Failed to update request status');
+      }
+      
+      const data = await response.json();
+      console.log('Update response:', data);
+      
+      // Update the local state
+      setDocumentRequests(prevRequests => 
+        prevRequests.map(req => 
+          req.id === requestId 
+            ? { ...req, status: newStatus } 
+            : req
+        )
+      );
+      
+      // Show success notification
+      setNotification({
+        type: 'success',
+        message: `Document request ${newStatus === 'approved' ? 'approved' : 'rejected'} successfully`
+      });
+      
+      // Clear notification after some time
+      setTimeout(() => {
+        setNotification(null);
+      }, 5000);
+      
+    } catch (err) {
+      console.error('Error updating request status:', err);
+      
+      // Show error notification
+      setNotification({
+        type: 'error',
+        message: err.message
+      });
+      
+      // Clear notification after some time
+      setTimeout(() => {
+        setNotification(null);
+      }, 5000);
+    }
+  };
+  
+  const handleViewProperty = (propertyId) => {
     navigate(`/property-details/${propertyId}`);
   };
 
@@ -349,168 +508,253 @@ function ListProperties() {
     <div className="list-properties">
       <header>
         <div className="container header-container">
-          <div className="logo-title-section">
+          <div className="logo-container">
             <img src="/assets/Blue Modern Technology Company Logo (1).png" alt="SureSign Logo" className="list-logo-image" />
+          </div>
+          
+          <div className="logo-title-section">
             <h1 className="list-header-title">PROPERTY LISTINGS</h1>
           </div>
-          <div className="profile-dropdown-container" ref={profileRef}>
-            <div className="list-seller-profile" onClick={toggleProfileMenu}>
-              <div className="seller-avatar">
-                <img 
-                  src={selfieUrl || '/placeholder.jpg'}
-                  alt="Seller Profile"
-                  onError={handleImageError}
-                  className="profile-image"
-                />
-              </div>
-              <span className="seller-name">{sellerData?.name || 'Loading...'}</span>
+          
+          <div className="header-actions">
+            {/* Document Requests Menu */}
+            <div className="requests-menu-container" ref={requestsRef}>
+              <button 
+                className="requests-menu-button" 
+                onClick={toggleRequestsMenu}
+                title="Document Requests"
+              >
+                <span className="requests-icon">📄</span>
+                {documentRequests.length > 0 && (
+                  <span className="requests-count">{documentRequests.length}</span>
+                )}
+              </button>
+              
+              {showRequestsMenu && (
+                <div className="requests-dropdown">
+                  <div className="requests-dropdown-header">
+                    <h3>Document Requests</h3>
+                  </div>
+                  <div className="requests-dropdown-content">
+                    {requestsLoading ? (
+                      <div className="requests-loading">Loading requests...</div>
+                    ) : documentRequests.length === 0 ? (
+                      <div className="no-requests">No document requests</div>
+                    ) : (
+                      <ul className="requests-list">
+                        {documentRequests.map(request => (
+                          <li key={request.id} className="request-item">
+                            <div className="request-info">
+                              <div className="request-property" onClick={() => handleViewProperty(request.property_id)}>
+                                <strong>Property:</strong> {request.property_details?.title || request.property_id}
+                              </div>
+                              <div className="request-buyer">
+                                <strong>Buyer:</strong> {request.buyer_details?.name || 'Unknown Buyer'}
+                              </div>
+                              <div className="request-date">
+                                <strong>Requested:</strong> {new Date(request.created_at).toLocaleDateString()}
+                              </div>
+                              <div className="request-status">
+                                <strong>Status:</strong> <span className={`status-badge ${request.status}`}>{request.status}</span>
+                              </div>
+                            </div>
+                            {request.status === 'pending' && (
+                              <div className="request-actions">
+                                <button 
+                                  className="approve-button"
+                                  onClick={() => handleUpdateRequestStatus(request.id, 'approved')}
+                                >
+                                  Approve
+                                </button>
+                                <button 
+                                  className="reject-button"
+                                  onClick={() => handleUpdateRequestStatus(request.id, 'rejected')}
+                                >
+                                  Reject
+                                </button>
+                              </div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-            {showProfileMenu && (
-              <div className="profile-dropdown">
-                <div className="profile-dropdown-header">
+            
+            <div className="profile-dropdown-container" ref={profileRef}>
+              <div className="list-seller-profile" onClick={toggleProfileMenu}>
+                <div className="seller-avatar">
                   <img 
                     src={selfieUrl || '/placeholder.jpg'}
                     alt="Seller Profile"
                     onError={handleImageError}
                     className="profile-image"
                   />
-                  <div className="profile-dropdown-info">
-                    <h3>{sellerData?.name}</h3>
-                    <p>{sellerData?.email}</p>
-                  </div>
                 </div>
-                <div className="profile-dropdown-content">
-                  <div className="profile-details">
-                    <div className="profile-detail-item">
-                      <span className="detail-label">Phone:</span>
-                      <span className="detail-value">{sellerData?.mobile_number}</span>
-                    </div>
-                    <div className="profile-detail-item">
-                      <span className="detail-label">Properties Listed:</span>
-                      <span className="detail-value">{properties.length}</span>
-                    </div>
-                  </div>
-                  <div className="profile-dropdown-footer">
-                    <button 
-                      className="btn btn-secondary"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleEditProfile();
-                      }}
-                    >
-                      Edit Profile
-                    </button>
-                    <button 
-                      className="btn btn-outline" 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleLogout();
-                      }}
-                    >
-                      Logout
-                    </button>
-                  </div>
-                </div>
+                <span className="seller-name">{sellerData?.name || 'Loading...'}</span>
               </div>
-            )}
+              {showProfileMenu && (
+                <div className="profile-dropdown">
+                  <div className="profile-dropdown-header">
+                    <img 
+                      src={selfieUrl || '/placeholder.jpg'}
+                      alt="Seller Profile"
+                      onError={handleImageError}
+                      className="profile-image"
+                    />
+                    <div className="profile-dropdown-info">
+                      <h3>{sellerData?.name}</h3>
+                      <p>{sellerData?.email}</p>
+                    </div>
+                  </div>
+                  <div className="profile-dropdown-content">
+                    <div className="profile-details">
+                      <div className="profile-detail-item">
+                        <span className="detail-label">Phone:</span>
+                        <span className="detail-value">{sellerData?.mobile_number}</span>
+                      </div>
+                      <div className="profile-detail-item">
+                        <span className="detail-label">Properties Listed:</span>
+                        <span className="detail-value">{properties.length}</span>
+                      </div>
+                    </div>
+                    <div className="profile-dropdown-footer">
+                      <button 
+                        className="btn btn-secondary"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleEditProfile();
+                        }}
+                      >
+                        Edit Profile
+                      </button>
+                      <button 
+                        className="btn btn-outline" 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleLogout();
+                        }}
+                      >
+                        Logout
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="container">
-        <div className="list-controls">
-          <div className="search-bar">
-            <input
-              type="text"
-              placeholder="Search by location or reference number"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            <button className="search-button">
-              <i className="search-icon">🔍</i>
-            </button>
-          </div>
-          <Link to="/add-property" className="btn btn-add">
-            <span className="plus-icon">+</span>
-            {properties.length === 0 ? 'List Your First Property' : 'Add Property'}
-          </Link>
-        </div>
-
-        <div className="properties-list">
-          {filteredProperties.length === 0 ? (
-            <div className="no-properties">
-              <p>No properties found. Add your first property!</p>
+      <main>
+        <div className="content-container">
+          {notification && (
+            <div className={`notification ${notification.type}`}>
+              <span className="notification-message">{notification.message}</span>
               <button 
-                className="btn btn-primary add-property-btn"
-                onClick={() => navigate('/add-property')}
+                className="notification-close"
+                onClick={() => setNotification(null)}
               >
-                Add Property
+                ×
               </button>
             </div>
-          ) : (
-            filteredProperties.map((property, index) => (
-              <div key={property.id || index} className="property-card">
-                <div className="property-details-wrapper">
-                  <div className="property-images">
-                    <img 
-                      src={getImageUrl(property) || '/placeholder.jpg'}
-                      alt={property.location || property.area || "Property"} 
-                      className="property-image"
-                      onError={(e) => handlePropertyImageError(e, property)}
-                    />
-                  </div>
-                  <div className="property-details">
-                    <h3 className="property-location">
-                      {property.location || property.area || "Unknown Location"}
-                    </h3>
-                    <div className="property-meta">
-                      <div className="property-meta-item">
-                        <span className="meta-label">Type:</span>
-                        <span className="meta-value">{property.property_type || "N/A"}</span>
-                      </div>
-                      <div className="property-meta-item">
-                        <span className="meta-label">Area:</span>
-                        <span className="meta-value">{property.square_feet} sq.ft</span>
-                      </div>
-                      <div className="property-meta-item">
-                        <span className="meta-label">Price:</span>
-                        <span className="meta-value">₹{property.price}/sq.ft</span>
-                      </div>
-                      <div className="property-meta-item">
-                        <span className="meta-label">Listed:</span>
-                        <span className="meta-value">{formatDate(property.created_at)}</span>
-                      </div>
-                      <div className="property-meta-item">
-                        <span className="meta-label">Status:</span>
-                        <span className={`status-badge ${property.status?.toLowerCase() || 'unknown'}`}>
-                          {property.status || "Unknown"}
-                        </span>
-                      </div>
+          )}
+          <div className="list-controls">
+            <div className="search-bar">
+              <input
+                type="text"
+                placeholder="Search by location or reference number"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              <button className="search-button">
+                <i className="search-icon">🔍</i>
+              </button>
+            </div>
+            <Link to="/add-property" className="btn btn-add">
+              <span className="plus-icon">+</span>
+              {properties.length === 0 ? 'List Your First Property' : 'Add Property'}
+            </Link>
+          </div>
+
+          <div className="properties-list">
+            {filteredProperties.length === 0 ? (
+              <div className="no-properties">
+                <p>No properties found. Add your first property!</p>
+                <button 
+                  className="btn btn-primary add-property-btn"
+                  onClick={() => navigate('/add-property')}
+                >
+                  Add Property
+                </button>
+              </div>
+            ) : (
+              filteredProperties.map((property, index) => (
+                <div key={property.id || index} className="property-card">
+                  <div className="property-details-wrapper">
+                    <div className="property-images">
+                      <img 
+                        src={getImageUrl(property) || '/placeholder.jpg'}
+                        alt={property.location || property.area || "Property"} 
+                        className="property-image"
+                        onError={(e) => handlePropertyImageError(e, property)}
+                      />
                     </div>
-                    <div className="property-buttons">
-                      <button 
-                        className="btn btn-primary" 
-                        onClick={() => handleViewPropertyDetails(property.id)}
-                      >
-                        View Details
-                      </button>
-                      <button 
-                        className="btn btn-secondary" 
-                        onClick={() => handleEditProperty(property.id)}
-                      >
-                        Edit
-                      </button>
+                    <div className="property-details">
+                      <h3 className="property-location">
+                        {property.location || property.area || "Unknown Location"}
+                      </h3>
+                      <div className="property-meta">
+                        <div className="property-meta-item">
+                          <span className="meta-label">Type:</span>
+                          <span className="meta-value">{property.property_type || "N/A"}</span>
+                        </div>
+                        <div className="property-meta-item">
+                          <span className="meta-label">Area:</span>
+                          <span className="meta-value">{property.square_feet} sq.ft</span>
+                        </div>
+                        <div className="property-meta-item">
+                          <span className="meta-label">Price:</span>
+                          <span className="meta-value">₹{property.price}/sq.ft</span>
+                        </div>
+                        <div className="property-meta-item">
+                          <span className="meta-label">Listed:</span>
+                          <span className="meta-value">{formatDate(property.created_at)}</span>
+                        </div>
+                        <div className="property-meta-item">
+                          <span className="meta-label">Status:</span>
+                          <span className={`status-badge ${property.status?.toLowerCase() || 'unknown'}`}>
+                            {property.status || "Unknown"}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="property-buttons">
+                        <button 
+                          className="btn btn-primary" 
+                          onClick={() => handleViewProperty(property.id)}
+                        >
+                          View Details
+                        </button>
+                        <button 
+                          className="btn btn-secondary" 
+                          onClick={() => handleEditProperty(property.id)}
+                        >
+                          Edit
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))
-          )}
+              ))
+            )}
+          </div>
         </div>
       </main>
 
       <footer>
-        <div className="container">
+        <div className="content-container">
           <p>&copy; 2025 Online Property Registration Portal. All Rights Reserved.</p>
         </div>
       </footer>

@@ -14,9 +14,15 @@ from azure.core.exceptions import AzureError
 from PIL import Image, ImageDraw
 import os
 import uuid
-import datetime
+from datetime import datetime
 import base64
 import urllib.parse
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from io import BytesIO
+import zipfile
+from app.utils.encryption import FileEncryptor
 
 router = APIRouter(tags=["Seller"])
 property_controller = PropertyListingController()
@@ -241,16 +247,38 @@ async def create_property_listing(
 
 
 @router.get("/property-document/{property_id}/{document_index}")
-async def get_property_document(property_id: str, document_index: int, response: Response, token_payload = Depends(AuthHandler.auth_wrapper)):
+async def get_property_document(
+    property_id: str, 
+    document_index: int, 
+    response: Response, 
+    token: Optional[str] = None,
+    filename: Optional[str] = None,
+    request: Request = None,
+    current_user: Optional[dict] = Depends(AuthHandler.auth_wrapper_optional)
+):
     """
     Get a specific property document by property ID and document index
     """
     azure_storage = None
     
     try:
+        # If no user from auth header, try token from query param
+        if not current_user and token:
+            try:
+                current_user = AuthHandler.decode_token(token)
+                logging.info(f"Using token from query parameter")
+            except Exception as e:
+                logging.error(f"Invalid token in query parameter: {str(e)}")
+                raise HTTPException(status_code=401, detail="Invalid token")
+        
+        # If still no user, authentication failed
+        if not current_user:
+            logging.error("No valid authentication provided")
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
         # Get the property details
         db = await get_database()
-        seller_id = token_payload['sub']
+        seller_id = current_user['sub']
         
         # Find the property in the properties collection
         property_doc = await db['properties'].find_one({
@@ -268,16 +296,26 @@ async def get_property_document(property_id: str, document_index: int, response:
         azure_storage = AzureStorageService()
         
         # Get document URL - handle both string and dictionary formats for backward compatibility
-        document_url = document_data['url'] if isinstance(document_data, dict) else document_data
+        document_url = None
+        original_filename = None
+        document_type = None
+        is_encrypted = False
         
-        # If document_data is a string, it's the URL directly
+        # If document_data is a string, it's the URL directly (old format)
         if isinstance(document_data, str):
             document_url = document_data
             logging.info(f"Document URL is a direct string: {document_url}")
-        # If it's a dict, extract the URL
-        elif isinstance(document_data, dict) and 'url' in document_data:
+            # Assume old format documents are encrypted
+            is_encrypted = True
+        # If it's a dict, extract the URL and encrypted flag
+        elif isinstance(document_data, dict):
             document_url = document_data.get('url')
+            original_filename = document_data.get('filename')
+            document_type = document_data.get('type')
+            # Check if document is marked as encrypted
+            is_encrypted = document_data.get('encrypted', True)  # Default to True for backward compatibility
             logging.info(f"Document URL extracted from dictionary: {document_url}")
+            logging.info(f"Original filename: {original_filename}, Type: {document_type}, Encrypted: {is_encrypted}")
         else:
             # Log the actual document_data for debugging
             logging.error(f"Unexpected document_data format: {type(document_data)}, value: {document_data}")
@@ -315,33 +353,305 @@ async def get_property_document(property_id: str, document_index: int, response:
         download_stream = await blob_client.download_blob()
         content = await download_stream.readall()
         
-        # Set cache headers
-        response.headers["Cache-Control"] = "public, max-age=3600"
-        
-        # Determine content type based on file extension
-        content_type = "application/octet-stream"  # Default
-        if blob_name.lower().endswith('.pdf'):
-            content_type = "application/pdf"
-        elif blob_name.lower().endswith('.doc'):
-            content_type = "application/msword"
-        elif blob_name.lower().endswith('.docx'):
-            content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        
-        # Set additional headers for downloads - handle both string and dictionary formats
-        filename = None
-        if isinstance(document_data, dict):
-            # Try to get the original filename from the document data
-            filename = document_data.get('filename', blob_name)
+        # If the document is encrypted, decrypt it before serving
+        if is_encrypted and "raw" not in request.query_params:
+            try:
+                # Create a file encryptor instance
+                file_encryptor = FileEncryptor()
+                
+                # Decrypt the content
+                logging.info(f"Decrypting document content of size {len(content)} bytes")
+                content = file_encryptor.decrypt_data(content)
+                logging.info(f"Successfully decrypted document to {len(content)} bytes")
+            except Exception as e:
+                logging.error(f"Error decrypting document: {str(e)}")
+                # If decryption fails, provide a helpful error message
+                raise HTTPException(
+                    status_code=500, 
+                    detail="This document is encrypted and could not be decrypted. Try requesting the raw version."
+                )
         else:
-            # If document_data is a string, use the blob name
-            filename = blob_name
+            logging.info(f"Serving unencrypted document of size {len(content)} bytes")
+        
+        # Determine content type and extension
+        content_type = "application/octet-stream"  # Default
+        file_extension = ".bin"
+        
+        # From the original filename if available
+        if original_filename and '.' in original_filename:
+            extension = original_filename.split('.')[-1].lower()
+            if extension == 'pdf':
+                content_type = "application/pdf"
+                file_extension = ".pdf"
+            elif extension == 'doc':
+                content_type = "application/msword"
+                file_extension = ".doc"
+            elif extension == 'docx':
+                content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                file_extension = ".docx"
+            elif extension == 'txt':
+                content_type = "text/plain"
+                file_extension = ".txt"
+        # Or from blob name
+        elif blob_name and '.' in blob_name:
+            extension = blob_name.split('.')[-1].lower()
+            if extension == 'pdf':
+                content_type = "application/pdf"
+                file_extension = ".pdf"
+            elif extension == 'doc':
+                content_type = "application/msword"
+                file_extension = ".doc"
+            elif extension == 'docx':
+                content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                file_extension = ".docx"
+            elif extension == 'txt':
+                content_type = "text/plain"
+                file_extension = ".txt"
+        
+        # Determine final filename
+        if filename:
+            # Use provided filename
+            final_filename = filename
+            # Ensure it has the correct extension
+            if not final_filename.lower().endswith(file_extension):
+                final_filename = f"{final_filename}{file_extension}"
+        elif original_filename:
+            # Clean up the original filename
+            final_filename = original_filename.split('_')[-1]
+            final_filename = final_filename.replace('[', '').replace(']', '')
+            # Ensure it has an extension
+            if not any(final_filename.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.txt']):
+                final_filename = f"{final_filename}{file_extension}"
+        elif document_type:
+            # Generate from document type
+            safe_type = document_type.lower().replace(' ', '_')
+            final_filename = f"{safe_type}{file_extension}"
+        else:
+            # Default generic name with extension
+            final_filename = f"document{file_extension}"
+        
+        # Make sure the filename is clean and safe
+        final_filename = ''.join(c for c in final_filename if c.isalnum() or c in '._- ')
+        
+        logging.info(f"Serving document: filename={final_filename}, content-type={content_type}")
+        
+        # Special handling for Word documents (.doc, .docx)
+        if file_extension.lower() in ['.doc', '.docx']:
+            logging.info(f"Handling Word document: {blob_name} with content length {len(content)}")
             
-        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+            # Check for verified mode (with blockchain verification certificate)
+            verified_mode = request.query_params.get('verified', 'false').lower() == 'true'
+            if verified_mode:
+                logging.info(f"Serving document with verification certificate")
+                try:
+                    # Get blockchain verification data
+                    blockchain_hash = None
+                    if isinstance(document_data, dict) and document_data.get('blockchain_tx_hash'):
+                        blockchain_hash = document_data.get('blockchain_tx_hash')
+                    
+                    if not blockchain_hash:
+                        raise HTTPException(status_code=400, detail="Blockchain verification data not available")
+                    
+                    # Create a verification certificate PDF
+                    from reportlab.pdfgen import canvas
+                    from reportlab.lib.pagesizes import letter
+                    from reportlab.lib import colors
+                    from io import BytesIO
+                    import tempfile
+                    import zipfile
+                    import os
+                    
+                    # Create a temporary file for the verification certificate
+                    temp_dir = tempfile.mkdtemp()
+                    cert_path = os.path.join(temp_dir, 'verification_certificate.pdf')
+                    
+                    # Generate verification certificate
+                    c = canvas.Canvas(cert_path, pagesize=letter)
+                    
+                    # Add certificate header
+                    c.setFont("Helvetica-Bold", 18)
+                    c.drawString(72, 750, "Document Verification Certificate")
+                    
+                    # Add SureSign logo/header
+                    c.setFont("Helvetica-Bold", 14)
+                    c.drawString(72, 720, "SureSign Blockchain Verification")
+                    
+                    # Add document details
+                    c.setFont("Helvetica", 12)
+                    c.drawString(72, 680, f"Document Name: {final_filename}")
+                    c.drawString(72, 660, f"Property ID: {property_id}")
+                    c.drawString(72, 640, f"Document Type: {document_type or 'N/A'}")
+                    c.drawString(72, 620, f"Date Verified: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    
+                    # Add blockchain verification details
+                    c.setFont("Helvetica-Bold", 12)
+                    c.drawString(72, 580, "Blockchain Verification Details:")
+                    
+                    c.setFont("Helvetica", 10)
+                    c.drawString(72, 560, f"Transaction Hash: {blockchain_hash}")
+                    c.drawString(72, 540, "Verification Method: SHA-256 with Blockchain Timestamp")
+                    c.drawString(72, 520, "This document has been verified against its blockchain hash.")
+                    c.drawString(72, 500, "To verify independently, check the transaction hash on the blockchain.")
+                    
+                    # Add legal notice
+                    c.setFont("Helvetica-Bold", 12)
+                    c.drawString(72, 460, "Legal Notice:")
+                    
+                    c.setFont("Helvetica", 10)
+                    c.drawString(72, 440, "This certificate serves as proof that the attached document has been")
+                    c.drawString(72, 425, "verified against its registered blockchain hash. The hash uniquely")
+                    c.drawString(72, 410, "identifies the document and ensures it has not been altered since")
+                    c.drawString(72, 395, "registration.")
+                    
+                    # Add verification status
+                    c.setFont("Helvetica-Bold", 14)
+                    c.setFillColor(colors.green)
+                    c.drawString(72, 350, "VERIFICATION STATUS: VERIFIED")
+                    c.setFillColor(colors.black)
+                    
+                    # Add footer
+                    c.setFont("Helvetica", 8)
+                    c.drawString(72, 72, f"Certificate generated by SureSign on {datetime.now().strftime('%Y-%m-%d')}")
+                    c.drawString(72, 60, "This certificate is computer-generated and does not require a signature.")
+                    
+                    c.save()
+                    
+                    # Now create a zip file containing both the certificate and original document
+                    zip_buffer = BytesIO()
+                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                        # Add the verification certificate
+                        zipf.write(cert_path, 'verification_certificate.pdf')
+                        
+                        # Add the original document
+                        doc_filename = 'original_' + final_filename
+                        zipf.writestr(doc_filename, content)
+                        
+                        # Add a README
+                        readme_content = f"""
+                        # SureSign Verified Document Package
+                        
+                        This package contains:
+                        
+                        1. verification_certificate.pdf - A certificate verifying the document's blockchain hash
+                        2. {doc_filename} - The original document
+                        
+                        The verification certificate contains the blockchain transaction hash that can be used
+                        to independently verify the document's authenticity.
+                        
+                        Transaction Hash: {blockchain_hash}
+                        
+                        For legal verification, both files should be kept together.
+                        """
+                        
+                        zipf.writestr('README.txt', readme_content)
+                    
+                    # Clean up the temporary directory
+                    os.unlink(cert_path)
+                    os.rmdir(temp_dir)
+                    
+                    # Get the zip data
+                    zip_buffer.seek(0)
+                    verified_package = zip_buffer.read()
+                    
+                    # Set response headers for the zip file
+                    response.headers["Content-Type"] = "application/zip"
+                    response.headers["Content-Disposition"] = f'attachment; filename="verified_{final_filename}.zip"'
+                    response.headers["Content-Length"] = str(len(verified_package))
+                    
+                    return Response(
+                        content=verified_package,
+                        media_type="application/zip",
+                        headers=response.headers
+                    )
+                    
+                except Exception as e:
+                    logging.error(f"Error creating verification package: {str(e)}")
+                    raise HTTPException(status_code=500, detail=f"Failed to create verification package: {str(e)}")
+            
+            # Check for raw mode (bypass blockchain verification)
+            raw_mode = request.query_params.get('raw', 'false').lower() == 'true'
+            if raw_mode:
+                logging.info(f"Serving Word document in raw mode")
+                try:
+                    # Set minimal headers to ensure the file is served unmodified
+                    response.headers["Content-Type"] = content_type
+                    response.headers["Content-Length"] = str(len(content))
+                    response.headers["Content-Disposition"] = f'attachment; filename="{final_filename}"'
+                    # Force binary transfer
+                    response.headers["Content-Transfer-Encoding"] = "binary"
+                    
+                    return Response(
+                        content=content,
+                        headers=response.headers
+                    )
+                except Exception as e:
+                    logging.error(f"Error serving raw Word document: {str(e)}")
+                    raise HTTPException(status_code=500, detail="Failed to serve raw document")
+            
+            # Check if this is a viewing request or download request
+            view_mode = request.query_params.get('view', 'false').lower() == 'true'
+            
+            # For view mode, serve as inline content
+            if view_mode:
+                logging.info(f"Serving Word document in view mode")
+                try:
+                    response.headers["Content-Type"] = content_type
+                    response.headers["Content-Length"] = str(len(content))
+                    response.headers["Content-Disposition"] = f'inline; filename="{final_filename}"'
+                    response.headers["X-Content-Type-Options"] = "nosniff"
+                    
+                    # Add blockchain verification header if available
+                    if isinstance(document_data, dict) and document_data.get('blockchain_tx_hash'):
+                        response.headers["X-Blockchain-Hash"] = document_data.get('blockchain_tx_hash')
+                    
+                    return Response(
+                        content=content,
+                        media_type=content_type,
+                    )
+                except Exception as e:
+                    logging.error(f"Error serving Word document in view mode: {str(e)}")
+                    raise HTTPException(status_code=500, detail="Failed to view document")
+            
+            # For download mode (default)
+            try:
+                # Set correct headers for Word documents
+                response.headers["Content-Type"] = content_type
+                response.headers["Content-Length"] = str(len(content))
+                response.headers["Content-Disposition"] = f'attachment; filename="{final_filename}"'
+                response.headers["Content-Transfer-Encoding"] = "binary"
+                response.headers["X-Content-Type-Options"] = "nosniff"
+                
+                # Add blockchain verification header if available
+                if isinstance(document_data, dict) and document_data.get('blockchain_tx_hash'):
+                    response.headers["X-Blockchain-Hash"] = document_data.get('blockchain_tx_hash')
+                
+                return Response(
+                    content=content,
+                    media_type=content_type,
+                )
+            except Exception as e:
+                logging.error(f"Error processing Word document for download: {str(e)}")
+                raise HTTPException(status_code=500, detail="Failed to process document")
+        
+        # For other document types
+        response.headers["Content-Type"] = content_type
+        response.headers["Content-Disposition"] = f'attachment; filename="{final_filename}"'
+        response.headers["Content-Length"] = str(len(content))
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        
+        # For debugging
+        logging.info(f"Response headers: {response.headers}")
         
         return Response(
             content=content,
-            media_type=content_type
+            media_type=content_type,
+            headers=response.headers
         )
+    except HTTPException as he:
+        raise he
     except Exception as e:
         logging.error(f"Error serving property document: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to retrieve document")
@@ -473,3 +783,80 @@ async def get_property(property_id: str, token_payload = Depends(AuthHandler.aut
     Get a specific property by ID
     """
     return await property_controller.get_property_details(token_payload, property_id)
+
+@router.get("/document-requests")
+async def list_document_requests(
+    token_payload: dict = Depends(AuthHandler.auth_wrapper)
+):
+    """
+    List all document access requests for properties owned by the seller
+    """
+    try:
+        if token_payload.get('type') != 'seller':
+            raise HTTPException(status_code=403, detail="Only sellers can access document requests")
+            
+        return await document_access_controller.list_document_requests(token_payload)
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logging.error(f"Error listing document requests: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list document requests: {str(e)}")
+
+@router.get("/document-requests/{request_id}")
+async def get_document_request_details(
+    request_id: str,
+    token_payload: dict = Depends(AuthHandler.auth_wrapper)
+):
+    """
+    Get detailed information about a specific document request
+    """
+    try:
+        if token_payload.get('type') != 'seller':
+            raise HTTPException(status_code=403, detail="Only sellers can access document request details")
+            
+        return await document_access_controller.get_request_details(token_payload, request_id)
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logging.error(f"Error getting document request details: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get document request details: {str(e)}")
+
+@router.put("/document-requests/{request_id}")
+async def handle_document_request(
+    request_id: str,
+    data: dict = Body(...),
+    token_payload: dict = Depends(AuthHandler.auth_wrapper)
+):
+    """
+    Approve or reject a document access request
+    
+    The request body should contain:
+    {
+        "status": "approved" or "rejected",
+        "rejection_reason": "Optional reason for rejection",
+        "expiry_days": 7 (optional, default is 7 days)
+    }
+    """
+    try:
+        if token_payload.get('type') != 'seller':
+            raise HTTPException(status_code=403, detail="Only sellers can handle document requests")
+        
+        status = data.get('status')
+        if not status or status not in ['approved', 'rejected']:
+            raise HTTPException(status_code=400, detail="Status must be 'approved' or 'rejected'")
+        
+        rejection_reason = data.get('rejection_reason')
+        expiry_days = data.get('expiry_days', 7)
+        
+        return await document_access_controller.handle_document_request(
+            token_payload, 
+            request_id, 
+            status, 
+            rejection_reason, 
+            expiry_days
+        )
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logging.error(f"Error handling document request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to handle document request: {str(e)}")

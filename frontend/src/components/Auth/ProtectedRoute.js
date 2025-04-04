@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
+import { getToken } from '../../utils/authUtils';
 
 /**
  * ProtectedRoute component that checks for authentication
@@ -14,8 +15,7 @@ function ProtectedRoute({ children, userType = 'seller' }) {
 
   useEffect(() => {
     const checkAuth = async () => {
-      const token = localStorage.getItem('token');
-      const storedUserType = localStorage.getItem('userType');
+      const token = getToken(userType);
       
       if (!token) {
         setIsAuthenticated(false);
@@ -41,8 +41,7 @@ function ProtectedRoute({ children, userType = 'seller' }) {
           setIsAuthenticated(true);
         } else {
           // If token is invalid, clear localStorage
-          localStorage.removeItem('token');
-          localStorage.removeItem('userType');
+          localStorage.removeItem(`${userType}_token`);
           setIsAuthenticated(false);
         }
       } catch (error) {
@@ -54,7 +53,7 @@ function ProtectedRoute({ children, userType = 'seller' }) {
     };
 
     checkAuth();
-  }, []);
+  }, [userType]);
 
   if (isLoading) {
     // Return loading indicator if still checking authentication

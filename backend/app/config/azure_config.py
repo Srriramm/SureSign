@@ -201,7 +201,12 @@ class AzureStorageService:
             
             # For property images, we don't need SAS token since container is public
             if container_name == self.container_property_images:
-                return direct_url
+                return {
+                    "direct_url": direct_url,
+                    "sas_url": direct_url,  # Same as direct_url for public containers
+                    "secure_filename": file_name,
+                    "timestamp": datetime.utcnow().timestamp()
+                }
             
             # Generate SAS token for access for other containers
             sas_token = generate_blob_sas(
@@ -213,7 +218,14 @@ class AzureStorageService:
                 expiry=datetime.utcnow() + timedelta(days=365)  # 1-year expiry
             )
             
-            return f"{direct_url}?{sas_token}"
+            sas_url = f"{direct_url}?{sas_token}"
+            
+            return {
+                "direct_url": direct_url,
+                "sas_url": sas_url,
+                "secure_filename": file_name,
+                "timestamp": datetime.utcnow().timestamp()
+            }
                 
         except Exception as e:
             logging.error(f"Upload failed: {str(e)}")

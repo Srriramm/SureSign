@@ -5,9 +5,10 @@ from jose import jwt
 import bcrypt
 import os
 from typing import Optional
+import logging
 
 class AuthHandler:
-    security = HTTPBearer(auto_error=False)  # Move auto_error parameter here
+    security = HTTPBearer(auto_error=False)
     SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'your-secret-key')
     ALGORITHM = "HS256"
 
@@ -46,14 +47,41 @@ class AuthHandler:
             raise HTTPException(status_code=401, detail='Token has expired')
         except jwt.JWTError:
             raise HTTPException(status_code=401, detail='Invalid token')
-
+    
     @classmethod
-    async def auth_wrapper(
-        cls, 
-        request: Request,
-        auth: Optional[HTTPAuthorizationCredentials] = Depends(security)  # Use Depends instead of Security
-    ):
-        """Enhanced wrapper for token authentication"""
+    def auth_wrapper(cls, auth: HTTPAuthorizationCredentials = Security(security)):
+        """
+        Standard auth wrapper that requires valid authentication
+        
+        Raises:
+            HTTPException: 401 if no valid token is provided
+        """
+        if not auth:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        return cls.decode_token(auth.credentials)
+        
+    @classmethod
+    async def auth_wrapper_optional(cls, auth: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+        """
+        Optional middleware that returns None instead of raising an exception if no valid token is provided
+        """
+        if not auth:
+            return None
+            
+        try:
+            return cls.decode_token(auth.credentials)
+        except Exception as e:
+            logging.warning(f"Auth error (non-blocking): {str(e)}")
+            return None
+            
+    @classmethod
+    async def auth_wrapper_with_query(cls, request: Request, auth: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+        """
+        Enhanced wrapper for token authentication that checks multiple sources
+        - Authorization header
+        - Cookies
+        - Query parameters
+        """
         # Allow unauthenticated access to public endpoints
         if request.url.path.startswith('/public/'):
             return None
@@ -62,14 +90,14 @@ class AuthHandler:
         if auth is not None:
             return cls.decode_token(auth.credentials)
         
-        # Check for token in cookies (alternative for images)
+        # Check for token in cookies
         token = request.cookies.get("access_token")
         if token:
             return cls.decode_token(token)
         
-        # Check for token in query parameters (for image tags)
+        # Check for token in query parameters
         token = request.query_params.get("token")
         if token:
             return cls.decode_token(token)
             
-        raise HTTPException(status_code=403, detail='Not authenticated')
+        raise HTTPException(status_code=401, detail='Authentication required')

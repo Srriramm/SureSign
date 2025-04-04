@@ -9,7 +9,12 @@ import UserRegistration from './components/General/UserRegistration';
 import RegistrationRouter from './components/General/RegistrationRouter';
 import EditProfile from './components/SellerFlow/EditProfile';
 import PropertyDetails from './components/SellerFlow/PropertyDetails';
+import BuyerDashboard from './components/BuyerFlow/BuyerDashboard';
+import BuyerProperties from './components/BuyerFlow/BuyerProperties';
+import BuyerPropertyDetails from './components/BuyerFlow/BuyerPropertyDetails';
+import EditBuyerProfile from './components/BuyerFlow/EditBuyerProfile';
 import ProtectedRoute from './components/Auth/ProtectedRoute';
+import DocumentRequests from './components/SellerFlow/DocumentRequests';
 
 function App() {
   return (
@@ -49,6 +54,40 @@ function App() {
                 <PropertyDetails />
               </ProtectedRoute>
             } 
+          />
+          <Route path="/document-requests" element={<ProtectedRoute userType="seller"><DocumentRequests /></ProtectedRoute>} />
+          {/* Buyer Routes */}
+          <Route
+            path="/buyer-dashboard"
+            element={
+              <ProtectedRoute userType="buyer">
+                <BuyerDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/buyer-properties"
+            element={
+              <ProtectedRoute userType="buyer">
+                <BuyerProperties />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/buyer-property/:propertyId"
+            element={
+              <ProtectedRoute userType="buyer">
+                <BuyerPropertyDetails />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/edit-buyer-profile"
+            element={
+              <ProtectedRoute userType="buyer">
+                <EditBuyerProfile />
+              </ProtectedRoute>
+            }
           />
       </Routes>
     </Router>

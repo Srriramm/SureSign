@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from app.routes import auth_routes
 from app.routes import seller_routes
+from app.routes import buyer_routes
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="SureSign Property Registration",
@@ -26,6 +27,9 @@ app.include_router(auth_routes.router, prefix="/auth", tags=["Authentication"])
 
 # Include seller routes - ensure prefix matches frontend URLs
 app.include_router(seller_routes.router, prefix="/seller", tags=["Seller"])
+
+# Include buyer routes
+app.include_router(buyer_routes.router, prefix="/buyer", tags=["Buyer"])
 
 @app.get("/")
 async def root():

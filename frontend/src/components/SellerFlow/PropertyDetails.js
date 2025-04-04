@@ -10,16 +10,24 @@ function PropertyDetails() {
   const [error, setError] = useState(null);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [sellerData, setSellerData] = useState(null);
+  const [documentsVisible, setDocumentsVisible] = useState(false);
+  const [documentRequests, setDocumentRequests] = useState([]);
+  const [unlockingDocuments, setUnlockingDocuments] = useState(false);
 
   useEffect(() => {
     const fetchPropertyDetails = async () => {
       try {
         setLoading(true);
-        const token = localStorage.getItem('token');
+        // Check for both generic token and seller-specific token
+        const token = localStorage.getItem('token') || localStorage.getItem('seller_token');
+        
         if (!token) {
-          navigate('/login');
+          console.error('No authentication token found');
+          navigate('/login/seller');
           return;
         }
+
+        console.log('Using token for API requests:', token ? 'Token found' : 'No token');
 
         // Get seller data for user info
         const sellerResponse = await fetch('http://localhost:8000/seller/get-seller', {
@@ -29,6 +37,7 @@ function PropertyDetails() {
         });
 
         if (!sellerResponse.ok) {
+          console.error('Failed to fetch seller data:', sellerResponse.status);
           throw new Error('Failed to fetch seller data');
         }
 
@@ -44,6 +53,7 @@ function PropertyDetails() {
         });
         
         if (!propertyResponse.ok) {
+          console.error('Failed to fetch property details:', propertyResponse.status);
           throw new Error('Failed to fetch property details');
         }
         
@@ -61,6 +71,25 @@ function PropertyDetails() {
 
     fetchPropertyDetails();
   }, [propertyId, navigate]);
+
+  // Add a side effect to ensure document visibility state is always respected
+  useEffect(() => {
+    console.log('Document visibility state changed to:', documentsVisible);
+    
+    // Target the documents list directly based on state
+    const documentsList = document.querySelector('.documents-list');
+    if (documentsList) {
+      if (documentsVisible) {
+        documentsList.classList.remove('blurred');
+        console.log('Removed blurred class');
+      } else {
+        documentsList.classList.add('blurred');
+        console.log('Added blurred class');
+      }
+    } else {
+      console.log('Could not find documents list element');
+    }
+  }, [documentsVisible]);
 
   const handleGoBack = () => {
     navigate('/list-properties');
@@ -94,8 +123,95 @@ function PropertyDetails() {
       return '#'; // Return a placeholder URL that won't cause navigation
     }
     
-    // Use the seller route for document access
-    return `http://localhost:8000/seller/property-document/${propertyId}/${index}`;
+    // Get token for authentication
+    const token = localStorage.getItem('token') || localStorage.getItem('seller_token');
+    console.log('Token for document download:', token ? 'Token found' : 'No token');
+    
+    if (!token) {
+      console.error('No token found for document download');
+      return '#';
+    }
+    
+    // Generate the document URL with the token as a query parameter
+    // Make sure to encode the token properly and use a direct URL format
+    return `http://localhost:8000/seller/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}`;
+  };
+
+  // Add a direct download handler to bypass potential URL issues
+  const handleDocumentDownload = async (doc, index, e) => {
+    e.preventDefault();
+    console.log('Handling direct document download for index:', index);
+    
+    if (!documentsVisible) {
+      console.log('Document access blocked - toggle visibility first');
+      return;
+    }
+    
+    try {
+      // Get token for authentication
+      const token = localStorage.getItem('token') || localStorage.getItem('seller_token');
+      
+      if (!token) {
+        console.error('No token found for document download');
+        return;
+      }
+      
+      // Get document type and potential filename for proper download
+      const docType = doc.type || doc.document_type || 'document';
+      let filename = 'property-document.pdf'; // Default fallback
+      
+      if (typeof doc.filename === 'string' && doc.filename) {
+        filename = doc.filename.split('_').pop();
+      } else if (typeof doc === 'object' && doc.url && typeof doc.url === 'string') {
+        filename = doc.url.split('/').pop().split('?')[0];
+      } else {
+        filename = `property-${propertyId}-document-${index}.pdf`;
+      }
+      
+      console.log(`Attempting to download document: ${filename}`);
+      
+      // For Word documents, we need a special approach
+      if (filename.toLowerCase().endsWith('.docx') || filename.toLowerCase().endsWith('.doc')) {
+        // Create direct link to a new page
+        const timestamp = new Date().getTime();
+        
+        // Create a simplified document viewer page instead of direct download
+        const viewerUrl = `/document-viewer?id=${propertyId}&index=${index}&token=${encodeURIComponent(token)}&type=docx`;
+        
+        // Or use the direct API endpoint for viewing in browser
+        const directApiUrl = `http://localhost:8000/seller/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}&filename=${encodeURIComponent(filename)}&t=${timestamp}&view=true`;
+        
+        // You can copy the document content to a new tab for viewing
+        console.log('Opening document in viewer:', directApiUrl);
+        window.open(directApiUrl, '_blank');
+      } else {
+        // For other document types, use the iframe approach
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        document.body.appendChild(iframe);
+        
+        // Create a form within the iframe
+        iframe.contentWindow.document.open();
+        iframe.contentWindow.document.write(`
+          <form method="GET" action="http://localhost:8000/seller/property-document/${propertyId}/${index}" target="_blank">
+            <input type="hidden" name="token" value="${token}" />
+            <input type="hidden" name="filename" value="${filename}" />
+          </form>
+        `);
+        iframe.contentWindow.document.close();
+        
+        // Submit the form
+        const form = iframe.contentWindow.document.querySelector('form');
+        form.submit();
+        
+        // Remove the iframe after a short delay
+        setTimeout(() => {
+          document.body.removeChild(iframe);
+        }, 1000);
+      }
+    } catch (error) {
+      console.error('Error downloading document:', error);
+    }
   };
 
   const getDocumentTypeLabel = (type) => {
@@ -149,6 +265,28 @@ function PropertyDetails() {
     }
   };
 
+  const toggleDocumentVisibility = () => {
+    console.log('Toggle document visibility called. Current state:', documentsVisible);
+    
+    // Force the toggle regardless of current state
+    const newState = !documentsVisible;
+    console.log('Setting documents visible to:', newState);
+    
+    // Always set the unlocking indicator for feedback
+    if (newState) {
+      setUnlockingDocuments(true);
+      setTimeout(() => {
+        setUnlockingDocuments(false);
+      }, 800);
+    }
+    
+    // Update state directly
+    setDocumentsVisible(newState);
+    
+    // Debug log after state update
+    console.log('Documents visibility updated to:', newState);
+  };
+
   if (loading) return (
     <div className="loading-container">
       <div className="loading-spinner"></div>
@@ -190,7 +328,7 @@ function PropertyDetails() {
           </div>
           
           <div className="header-center">
-            <h1>Property Marketplace</h1>
+            <h1>Property Details</h1>
           </div>
           
           <div className="header-right">
@@ -268,32 +406,236 @@ function PropertyDetails() {
             
             {property.documents && property.documents.length > 0 && (
               <div className="property-documents">
-                <h3>Documents</h3>
-                <div className="documents-list">
+                <div className="documents-header">
+                  <h3>Property Documents</h3>
+                  <div className="toggle-button-container">
+                    <button 
+                      className={`toggle-visibility-btn ${documentsVisible ? 'visible' : ''}`}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        console.log('Eye button clicked');
+                        toggleDocumentVisibility();
+                      }}
+                      aria-label={documentsVisible ? "Hide Documents" : "Show Documents"}
+                      title={documentsVisible ? "Click to Hide Documents" : "Click to View Documents"}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        {documentsVisible ? (
+                          <>
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                          </>
+                        ) : (
+                          <>
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                            <line x1="1" y1="1" x2="23" y2="23"></line>
+                          </>
+                        )}
+                      </svg>
+                      {unlockingDocuments && <span className="spinner-dots"></span>}
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Fallback text button in case the eye icon doesn't work */}
+                <button 
+                  className="fallback-toggle-btn"
+                  onClick={toggleDocumentVisibility}
+                >
+                  {documentsVisible ? "Hide Documents" : "Show Documents"}
+                </button>
+                
+                <div className={`documents-list ${documentsVisible ? '' : 'blurred'}`}>
                   {property.documents.map((doc, index) => {
-                    console.log('Rendering document:', doc);
+                    // Get original filename and extract the extension
+                    let filename = '';
+                    let fileExtension = '.docx'; // Default to docx as it's common
+                    
+                    if (typeof doc.filename === 'string' && doc.filename) {
+                      // Extract just the filename portion without path or extra data
+                      const lastPart = doc.filename.split('_').pop();
+                      filename = lastPart.replace(/[\[\]]/g, '');
+                      
+                      // Get extension if it exists
+                      if (filename.includes('.')) {
+                        fileExtension = '.' + filename.split('.').pop();
+                      }
+                    } else if (typeof doc === 'object' && doc.url && typeof doc.url === 'string') {
+                      const urlParts = doc.url.split('/').pop().split('?')[0];
+                      filename = urlParts;
+                      
+                      // Get extension if it exists
+                      if (filename.includes('.')) {
+                        fileExtension = '.' + filename.split('.').pop();
+                      }
+                    } else {
+                      // Create a filename based on document type if available
+                      const docType = doc.type || 'document';
+                      filename = `${docType.toLowerCase().replace(/\s+/g, '-')}-${index}${fileExtension}`;
+                    }
+                    
+                    // Ensure filename has the correct extension
+                    if (!filename.toLowerCase().endsWith(fileExtension.toLowerCase())) {
+                      filename = `${filename}${fileExtension}`;
+                    }
+                    
+                    // Get token for auth
+                    const token = localStorage.getItem('token') || localStorage.getItem('seller_token');
+                    
+                    // Determine document type icon
+                    let docIcon = '📄';
+                    if (fileExtension.toLowerCase() === '.pdf') {
+                      docIcon = '📕';
+                    } else if (fileExtension.toLowerCase() === '.doc' || fileExtension.toLowerCase() === '.docx') {
+                      docIcon = '📝';
+                    }
+                    
                     return (
-                      <a 
-                        key={index} 
-                        href={getDocumentUrl(doc, index)} 
-                        className="document-item"
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                      >
+                      <div key={index} className="document-item">
                         <div className="document-icon">
-                          <i className="document-type-icon">📄</i>
+                          <i className="document-type-icon">{docIcon}</i>
                         </div>
                         <div className="document-info">
-                          <span className="document-title">{getDocumentTypeLabel(doc.type)}</span>
-                          <span className="document-filename">
-                            {typeof doc.filename === 'string' && doc.filename 
-                              ? doc.filename.split('_').pop() 
-                              : typeof doc === 'object' && doc.url && typeof doc.url === 'string'
-                                ? doc.url.split('/').pop().split('?')[0]
-                                : 'Document'}
-                          </span>
+                          <span className="document-title">{getDocumentTypeLabel(doc.type || doc.document_type)}</span>
+                          <span className="document-filename">{filename}</span>
                         </div>
-                      </a>
+                        <button 
+                          className="download-btn"
+                          disabled={!documentsVisible}
+                          onClick={(e) => {
+                            if (!documentsVisible) {
+                              console.log('Document access blocked - toggle visibility first');
+                              return;
+                            }
+                            
+                            // Show options to the user
+                            const downloadOptions = document.createElement('div');
+                            downloadOptions.className = 'download-options';
+                            downloadOptions.innerHTML = `
+                              <div class="download-options-inner">
+                                <h4>Document Access Options</h4>
+                                <p>Select how you want to access the document:</p>
+                                <button class="download-option-btn original">Download Original</button>
+                                <button class="download-option-btn verified">Download with Verification</button>
+                                <button class="download-option-btn view">View in Browser</button>
+                                <button class="download-option-btn cancel">Cancel</button>
+                              </div>
+                            `;
+                            
+                            // Style the options modal
+                            const style = document.createElement('style');
+                            style.textContent = `
+                              .download-options {
+                                position: fixed;
+                                top: 0;
+                                left: 0;
+                                right: 0;
+                                bottom: 0;
+                                background: rgba(0,0,0,0.7);
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                z-index: 1000;
+                              }
+                              .download-options-inner {
+                                background: white;
+                                padding: 20px;
+                                border-radius: 8px;
+                                max-width: 400px;
+                                width: 100%;
+                                text-align: center;
+                              }
+                              .download-option-btn {
+                                display: block;
+                                width: 100%;
+                                padding: 10px;
+                                margin: 10px 0;
+                                border: none;
+                                border-radius: 4px;
+                                cursor: pointer;
+                              }
+                              .download-option-btn.original {
+                                background: #2563eb;
+                                color: white;
+                              }
+                              .download-option-btn.verified {
+                                background: #10b981;
+                                color: white;
+                              }
+                              .download-option-btn.view {
+                                background: #9ca3af;
+                                color: white;
+                              }
+                              .download-option-btn.cancel {
+                                background: #f3f4f6;
+                                color: #111827;
+                              }
+                            `;
+                            
+                            document.head.appendChild(style);
+                            document.body.appendChild(downloadOptions);
+                            
+                            // Handle option clicks
+                            const originalBtn = downloadOptions.querySelector('.original');
+                            const verifiedBtn = downloadOptions.querySelector('.verified');
+                            const viewBtn = downloadOptions.querySelector('.view');
+                            const cancelBtn = downloadOptions.querySelector('.cancel');
+                            
+                            // Download original document (for admin/debug use)
+                            originalBtn.addEventListener('click', () => {
+                              const timestamp = new Date().getTime();
+                              const url = `http://localhost:8000/seller/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}&filename=${encodeURIComponent(filename)}&t=${timestamp}&raw=true`;
+                              
+                              const link = document.createElement('a');
+                              link.href = url;
+                              link.setAttribute('download', filename);
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
+                              
+                              document.body.removeChild(downloadOptions);
+                              document.head.removeChild(style);
+                            });
+                            
+                            // Download document with verification certificate
+                            verifiedBtn.addEventListener('click', () => {
+                              const timestamp = new Date().getTime();
+                              const url = `http://localhost:8000/seller/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}&filename=${encodeURIComponent(filename)}&t=${timestamp}&verified=true`;
+                              
+                              const link = document.createElement('a');
+                              link.href = url;
+                              link.setAttribute('download', filename);
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
+                              
+                              document.body.removeChild(downloadOptions);
+                              document.head.removeChild(style);
+                            });
+                            
+                            viewBtn.addEventListener('click', () => {
+                              // View in browser option
+                              const timestamp = new Date().getTime();
+                              const url = `http://localhost:8000/seller/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}&filename=${encodeURIComponent(filename)}&t=${timestamp}&view=true`;
+                              
+                              window.open(url, '_blank');
+                              
+                              // Remove the options
+                              document.body.removeChild(downloadOptions);
+                              document.head.removeChild(style);
+                            });
+                            
+                            cancelBtn.addEventListener('click', () => {
+                              // Remove the options
+                              document.body.removeChild(downloadOptions);
+                              document.head.removeChild(style);
+                            });
+                          }}
+                        >
+                          Download
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
