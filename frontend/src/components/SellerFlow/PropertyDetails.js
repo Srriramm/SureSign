@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import './PropertyDetails.css';
+import { getToken, clearAuthData } from '../../utils/authUtils';
 
 function PropertyDetails() {
   const { propertyId } = useParams();
@@ -18,8 +19,7 @@ function PropertyDetails() {
     const fetchPropertyDetails = async () => {
       try {
         setLoading(true);
-        // Check for both generic token and seller-specific token
-        const token = localStorage.getItem('token') || localStorage.getItem('seller_token');
+        const token = getToken('seller');
         
         if (!token) {
           console.error('No authentication token found');
@@ -37,6 +37,13 @@ function PropertyDetails() {
         });
 
         if (!sellerResponse.ok) {
+          if (sellerResponse.status === 401) {
+            // Token has expired
+            console.error('Token has expired');
+            clearAuthData('seller');
+            navigate('/login/seller');
+            return;
+          }
           console.error('Failed to fetch seller data:', sellerResponse.status);
           throw new Error('Failed to fetch seller data');
         }
@@ -51,8 +58,15 @@ function PropertyDetails() {
             'Authorization': `Bearer ${token}`
           }
         });
-        
+
         if (!propertyResponse.ok) {
+          if (propertyResponse.status === 401) {
+            // Token has expired
+            console.error('Token has expired');
+            clearAuthData('seller');
+            navigate('/login/seller');
+            return;
+          }
           console.error('Failed to fetch property details:', propertyResponse.status);
           throw new Error('Failed to fetch property details');
         }
@@ -137,10 +151,60 @@ function PropertyDetails() {
     return `http://localhost:8000/seller/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}`;
   };
 
-  // Add a direct download handler to bypass potential URL issues
+  // Add error handling for token expiration in document operations
+  const handleDocumentOperation = async (operation) => {
+    try {
+      const token = getToken('seller');
+      if (!token) {
+        navigate('/login/seller');
+        return;
+      }
+
+      const response = await operation(token);
+      
+      if (!response.ok) {
+        if (response.status === 401) {
+          // Token has expired
+          console.error('Token has expired');
+          clearAuthData('seller');
+          navigate('/login/seller');
+          return;
+        }
+        throw new Error('Operation failed');
+      }
+      
+      return response;
+    } catch (err) {
+      console.error('Error in document operation:', err);
+      throw err;
+    }
+  };
+
+  // Update document visibility toggle to handle token expiration
+  const toggleDocumentVisibility = async () => {
+    try {
+      setUnlockingDocuments(true);
+      await handleDocumentOperation(async (token) => {
+        return fetch(`http://localhost:8000/seller/property/${propertyId}/toggle-documents`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+      });
+      
+      setDocumentsVisible(!documentsVisible);
+    } catch (err) {
+      console.error('Error toggling document visibility:', err);
+      setError('Failed to toggle document visibility');
+    } finally {
+      setUnlockingDocuments(false);
+    }
+  };
+
+  // Update document download to handle token expiration
   const handleDocumentDownload = async (doc, index, e) => {
     e.preventDefault();
-    console.log('Handling direct document download for index:', index);
     
     if (!documentsVisible) {
       console.log('Document access blocked - toggle visibility first');
@@ -148,69 +212,13 @@ function PropertyDetails() {
     }
     
     try {
-      // Get token for authentication
-      const token = localStorage.getItem('token') || localStorage.getItem('seller_token');
-      
-      if (!token) {
-        console.error('No token found for document download');
-        return;
-      }
-      
-      // Get document type and potential filename for proper download
-      const docType = doc.type || doc.document_type || 'document';
-      let filename = 'property-document.pdf'; // Default fallback
-      
-      if (typeof doc.filename === 'string' && doc.filename) {
-        filename = doc.filename.split('_').pop();
-      } else if (typeof doc === 'object' && doc.url && typeof doc.url === 'string') {
-        filename = doc.url.split('/').pop().split('?')[0];
-      } else {
-        filename = `property-${propertyId}-document-${index}.pdf`;
-      }
-      
-      console.log(`Attempting to download document: ${filename}`);
-      
-      // For Word documents, we need a special approach
-      if (filename.toLowerCase().endsWith('.docx') || filename.toLowerCase().endsWith('.doc')) {
-        // Create direct link to a new page
-        const timestamp = new Date().getTime();
-        
-        // Create a simplified document viewer page instead of direct download
-        const viewerUrl = `/document-viewer?id=${propertyId}&index=${index}&token=${encodeURIComponent(token)}&type=docx`;
-        
-        // Or use the direct API endpoint for viewing in browser
-        const directApiUrl = `http://localhost:8000/seller/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}&filename=${encodeURIComponent(filename)}&t=${timestamp}&view=true`;
-        
-        // You can copy the document content to a new tab for viewing
-        console.log('Opening document in viewer:', directApiUrl);
-        window.open(directApiUrl, '_blank');
-      } else {
-        // For other document types, use the iframe approach
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        document.body.appendChild(iframe);
-        
-        // Create a form within the iframe
-        iframe.contentWindow.document.open();
-        iframe.contentWindow.document.write(`
-          <form method="GET" action="http://localhost:8000/seller/property-document/${propertyId}/${index}" target="_blank">
-            <input type="hidden" name="token" value="${token}" />
-            <input type="hidden" name="filename" value="${filename}" />
-          </form>
-        `);
-        iframe.contentWindow.document.close();
-        
-        // Submit the form
-        const form = iframe.contentWindow.document.querySelector('form');
-        form.submit();
-        
-        // Remove the iframe after a short delay
-        setTimeout(() => {
-          document.body.removeChild(iframe);
-        }, 1000);
-      }
-    } catch (error) {
-      console.error('Error downloading document:', error);
+      await handleDocumentOperation(async (token) => {
+        const downloadUrl = `http://localhost:8000/seller/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}`;
+        window.open(downloadUrl, '_blank');
+      });
+    } catch (err) {
+      console.error('Error downloading document:', err);
+      setError('Failed to download document');
     }
   };
 
@@ -263,28 +271,6 @@ function PropertyDetails() {
       e.target.onerror = null;
       e.target.src = '/placeholder.jpg';
     }
-  };
-
-  const toggleDocumentVisibility = () => {
-    console.log('Toggle document visibility called. Current state:', documentsVisible);
-    
-    // Force the toggle regardless of current state
-    const newState = !documentsVisible;
-    console.log('Setting documents visible to:', newState);
-    
-    // Always set the unlocking indicator for feedback
-    if (newState) {
-      setUnlockingDocuments(true);
-      setTimeout(() => {
-        setUnlockingDocuments(false);
-      }, 800);
-    }
-    
-    // Update state directly
-    setDocumentsVisible(newState);
-    
-    // Debug log after state update
-    console.log('Documents visibility updated to:', newState);
   };
 
   if (loading) return (

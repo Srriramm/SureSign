@@ -181,22 +181,27 @@ async def get_property_image(
         if not property_doc or 'images' not in property_doc or len(property_doc['images']) <= image_index:
             return Response(status_code=404)
         
-        # Get image URL from property
-        image_url = property_doc['images'][image_index]
+        # Get image data from property
+        image_data = property_doc['images'][image_index]
         
         # Create Azure storage service
         azure_storage = AzureStorageService()
         
-        # Extract container and blob name from URL
-        container_name = azure_storage.container_property_images  # Default container for property images
+        # Get the filename from the image data
+        blob_name = image_data.get('filename')
+        if not blob_name:
+            # Fallback to extracting from URL if filename is not available
+            url = image_data.get('url', '')
+            url_parts = url.split('/')
+            blob_name = url_parts[-1].split('?')[0]  # Remove SAS token if present
         
-        # URL format varies based on how the URL was stored
-        if isinstance(image_url, dict) and 'filename' in image_url:
-            blob_name = image_url['filename']
-        else:
-            # Try to extract filename from URL if it's a string
-            parts = image_url.split('/')
-            blob_name = parts[-1].split('?')[0]  # Remove SAS token if present
+        # URL decode the blob name
+        blob_name = urllib.parse.unquote(blob_name)
+        
+        # Get the container name from Azure storage service
+        container_name = azure_storage.container_property_images
+        
+        logging.info(f"Retrieving property image: container={container_name}, blob={blob_name}")
         
         try:
             # Get blob service client
@@ -215,10 +220,8 @@ async def get_property_image(
             # Set cache headers
             response.headers["Cache-Control"] = "public, max-age=3600"
             
-            # Determine content type
-            content_type = "image/jpeg"
-            if blob_name.lower().endswith('.png'):
-                content_type = "image/png"
+            # Get content type from image data or default to jpeg
+            content_type = image_data.get('content_type', 'image/jpeg')
             
             return Response(
                 content=content,
@@ -226,13 +229,12 @@ async def get_property_image(
             )
         except Exception as e:
             logging.error(f"Error downloading image: {str(e)}")
-            return Response(status_code=404)
+            raise HTTPException(status_code=500, detail=f"Failed to download image: {str(e)}")
             
     except Exception as e:
         logging.error(f"Error serving image: {str(e)}")
-        return Response(status_code=404)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve image: {str(e)}")
     finally:
-        # Close Azure storage client
         if azure_storage:
             await azure_storage.close()
 

@@ -742,37 +742,47 @@ async def get_public_property_image(
             raise HTTPException(status_code=404, detail="Image not found")
         
         image_data = property_doc['images'][image_index]
-        image_url = image_data['url']
         
         # Create Azure storage service
         azure_storage = AzureStorageService()
         
-        # Extract container and blob name
-        url_parts = image_url.split('/')
-        container_name = azure_storage.container_property_images  # Use configured container name
-        blob_name = url_parts[-1].split('?')[0]  # Remove SAS token
+        # Get the filename from the image data
+        blob_name = image_data.get('filename')
+        if not blob_name:
+            # Fallback to extracting from URL if filename is not available
+            url = image_data.get('url', '')
+            url_parts = url.split('/')
+            blob_name = url_parts[-1].split('?')[0]  # Remove SAS token if present
         
         # URL decode the blob name
         blob_name = urllib.parse.unquote(blob_name)
         
+        # Get the container name from Azure storage service
+        container_name = azure_storage.container_property_images
+        
         logging.info(f"Retrieving property image: container={container_name}, blob={blob_name}")
         
-        # Download image
-        image_content = await azure_storage.download_file(container_name, blob_name)
-        
-        # Set cache headers
-        response.headers["Cache-Control"] = "public, max-age=3600"
-        
-        # Determine content type
-        content_type = image_data.get('content_type', 'image/jpeg')
-        
-        return Response(
-            content=image_content,
-            media_type=content_type
-        )
+        try:
+            # Download image
+            image_content = await azure_storage.download_file(container_name, blob_name)
+            
+            # Set cache headers
+            response.headers["Cache-Control"] = "public, max-age=3600"
+            
+            # Get content type from image data or default to jpeg
+            content_type = image_data.get('content_type', 'image/jpeg')
+            
+            return Response(
+                content=image_content,
+                media_type=content_type
+            )
+        except Exception as e:
+            logging.error(f"Error downloading image: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to download image: {str(e)}")
+            
     except Exception as e:
         logging.error(f"Error serving public property image: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve image")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve image: {str(e)}")
     finally:
         if azure_storage:
             await azure_storage.close()

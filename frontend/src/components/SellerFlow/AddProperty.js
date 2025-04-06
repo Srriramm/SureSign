@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import './AddProperty.css';
+import { getToken, clearAuthData } from '../../utils/authUtils';
 
 function AddProperty() {
   const navigate = useNavigate();
@@ -22,6 +23,14 @@ function AddProperty() {
   const [errors, setErrors] = useState({});
   const [documentType, setDocumentType] = useState('');
   const [propertyId, setPropertyId] = useState(null);
+
+  // Add useEffect to check token on component mount
+  useEffect(() => {
+    const token = getToken('seller');
+    if (!token) {
+      navigate('/login/seller');
+    }
+  }, [navigate]);
 
   // Function to handle image upload errors and retry with different methods
   const handleImageError = (e, index) => {
@@ -202,10 +211,10 @@ function AddProperty() {
     setLoading(true);
 
     try {
-      const token = localStorage.getItem('token');
+      const token = getToken('seller');
       if (!token) {
-        alert('Please login to continue');
-        navigate('/login');
+        console.error('No authentication token found');
+        navigate('/login/seller');
         return;
       }
 
@@ -242,6 +251,13 @@ function AddProperty() {
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          // Token has expired
+          console.error('Token has expired');
+          clearAuthData('seller');
+          navigate('/login/seller');
+          return;
+        }
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Failed to create property listing');
       }
