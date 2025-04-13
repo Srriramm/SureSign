@@ -21,6 +21,8 @@ class AzureStorageService:
         self.container_user_selfies = os.getenv('AZURE_CONTAINER_USER_SELFIES', 'sec-user-kyc-images')
         self.container_property_docs = os.getenv('AZURE_CONTAINER_PROPERTY_DOCUMENTS', 'sec-property-legal-docs')
         self.container_property_images = os.getenv('AZURE_CONTAINER_PROPERTY_IMAGES', 'sec-property-verification-images')
+        self.container_secure_docs = os.getenv('AZURE_CONTAINER_SECURE_DOCUMENTS', 'documents')
+        self.container_doc_metadata = os.getenv('AZURE_CONTAINER_DOCUMENT_METADATA', 'document-metadata')
         
         # Security configuration
         self.public_access = os.getenv('AZURE_CONTAINER_PUBLIC_ACCESS', 'false').lower() == 'true'
@@ -166,15 +168,19 @@ class AzureStorageService:
         """
         Upload a file to Azure Blob Storage and return a URL
         """
-        # Map container type to actual container name if needed
-        if container_name == 'user_selfies':
-            container_name = self.container_user_selfies
-        elif container_name == 'property_documents' or container_name == 'property-documents':
-            container_name = self.container_property_docs
-        elif container_name == 'property_images' or container_name == 'property-images':
-            container_name = self.container_property_images
-            
         try:
+            # Map container type to actual container name if needed
+            if container_name == 'user_selfies':
+                container_name = self.container_user_selfies
+            elif container_name == 'property_documents' or container_name == 'property-documents':
+                container_name = self.container_property_docs
+            elif container_name == 'property_images' or container_name == 'property-images':
+                container_name = self.container_property_images
+            elif container_name == 'secure_documents' or container_name == 'documents':
+                container_name = self.container_secure_docs
+            elif container_name == 'document_metadata' or container_name == 'document-metadata':
+                container_name = self.container_doc_metadata
+            
             # Create and get container with proper security settings
             container_client = await self.create_secure_container(container_name)
             
@@ -188,6 +194,10 @@ class AzureStorageService:
                 cache_control="public, max-age=31536000"  # 1 year cache
             )
             
+            # Convert metadata to string if it's a dictionary
+            if isinstance(metadata, dict):
+                metadata = {str(k): str(v) for k, v in metadata.items()}
+            
             # Upload file with content settings and metadata
             await blob_client.upload_blob(
                 file_content, 
@@ -199,37 +209,26 @@ class AzureStorageService:
             # Generate direct URL
             direct_url = blob_client.url
             
-            # For property images, we don't need SAS token since container is public
-            if container_name == self.container_property_images:
-                return {
-                    "direct_url": direct_url,
-                    "sas_url": direct_url,  # Same as direct_url for public containers
-                    "secure_filename": file_name,
-                    "timestamp": datetime.utcnow().timestamp()
-                }
+            # If container is private, generate a SAS URL
+            if not self.public_access:
+                sas_token = generate_blob_sas(
+                    account_name=self.account_name,
+                    container_name=container_name,
+                    blob_name=file_name,
+                    account_key=self.account_key,
+                    permission=BlobSasPermissions(read=True),
+                    expiry=datetime.utcnow() + timedelta(days=7)
+                )
+                direct_url = f"{direct_url}?{sas_token}"
             
-            # Generate SAS token for access for other containers
-            sas_token = generate_blob_sas(
-                account_name=self.account_name,
-                container_name=container_name,
-                blob_name=file_name,
-                account_key=self.account_key,
-                permission=BlobSasPermissions(read=True),
-                expiry=datetime.utcnow() + timedelta(days=365)  # 1-year expiry
-            )
+            return direct_url
             
-            sas_url = f"{direct_url}?{sas_token}"
-            
-            return {
-                "direct_url": direct_url,
-                "sas_url": sas_url,
-                "secure_filename": file_name,
-                "timestamp": datetime.utcnow().timestamp()
-            }
-                
         except Exception as e:
-            logging.error(f"Upload failed: {str(e)}")
-            raise
+            logging.error(f"Failed to upload file {file_name} to container {container_name}: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to upload file: {str(e)}"
+            )
 
     async def download_file(self, container_name: str, blob_path: str) -> bytes:
         """
@@ -250,6 +249,10 @@ class AzureStorageService:
             container_name = 'property_images'
         elif container_name == 'property-documents':
             container_name = 'property_documents'
+        elif container_name == 'secure-documents':
+            container_name = 'secure_documents'
+        elif container_name == 'document-metadata':
+            container_name = 'document_metadata'
             
         # Map container type to actual container name if needed
         if container_name == 'user_selfies':
@@ -258,6 +261,12 @@ class AzureStorageService:
             container_name = self.container_property_docs
         elif container_name == 'property_images':
             container_name = self.container_property_images
+        elif container_name == 'secure_documents' or container_name == 'documents':
+            container_name = self.container_secure_docs
+        elif container_name == 'document_metadata' or container_name == 'document-metadata':
+            container_name = self.container_doc_metadata
+            
+        logging.info(f"Mapped container name '{container_name}' for download")
         
         blob_service_client = None
         container_client = None
@@ -301,6 +310,10 @@ class AzureStorageService:
             download_stream = await blob_client.download_blob()
             content = await download_stream.readall()
             
+            if not content:
+                logging.error(f"Downloaded content is empty from {container_name}/{blob_path}")
+                raise HTTPException(status_code=500, detail="Downloaded content is empty")
+                
             logging.info(f"Successfully downloaded {len(content)} bytes from {container_name}/{blob_path}")
             return content
         except Exception as e:

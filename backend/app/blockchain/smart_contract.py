@@ -4,6 +4,7 @@ import json
 from web3 import Web3
 import logging
 import traceback
+import hashlib
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -100,4 +101,32 @@ class BlockchainService:
         except Exception as e:
             logger.error(f"Error storing document hash: {e}")
             logger.error(traceback.format_exc())
+            raise
+
+    async def register_document(self, document_hash: str, owner_id: str, document_id: str, timestamp: str) -> str:
+        """
+        Register a document on the blockchain with its hash and metadata
+        
+        Args:
+            document_hash: SHA-256 hash of the document
+            owner_id: ID of the document owner
+            document_id: Unique identifier for the document
+            timestamp: ISO format timestamp of registration
+            
+        Returns:
+            Transaction hash of the blockchain registration
+        """
+        try:
+            # Create a combined hash that includes metadata
+            metadata_string = f"{document_hash}|{owner_id}|{document_id}|{timestamp}"
+            combined_hash = hashlib.sha256(metadata_string.encode()).hexdigest()
+            
+            # Store the combined hash on the blockchain
+            tx_hash = await self.store_document_hash(combined_hash)
+            
+            logger.info(f"Document registered on blockchain. TX Hash: {tx_hash}")
+            return tx_hash
+            
+        except Exception as e:
+            logger.error(f"Failed to register document on blockchain: {str(e)}")
             raise

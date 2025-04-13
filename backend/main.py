@@ -3,10 +3,13 @@ from app.routes import auth_routes
 from app.routes import seller_routes
 from app.routes import buyer_routes
 from fastapi.middleware.cors import CORSMiddleware
+from app.core.config import settings
 
-app = FastAPI(title="SureSign Property Registration",
-              description="API for secure property registration platform",
-              version="1.0.0")
+app = FastAPI(
+    title=settings.APP_NAME,
+    description="API for secure property registration platform",
+    version=settings.APP_VERSION
+)
 
 # Configure CORS
 app.add_middleware(
@@ -34,8 +37,8 @@ app.include_router(buyer_routes.router, prefix="/buyer", tags=["Buyer"])
 @app.get("/")
 async def root():
     return {
-        "message": "SureSign Property Registration Platform API", 
-        "version": "1.0.0",
+        "message": f"{settings.APP_NAME} Property Registration Platform API", 
+        "version": settings.APP_VERSION,
         "docs_url": "/docs"
     }
 

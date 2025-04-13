@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, UploadFile, Form, Path, HTTPException, Response, Body, Request
+from fastapi import APIRouter, Depends, File, UploadFile, Form, Path, HTTPException, Response, Body, Request, Query
 from typing import List, Optional, Dict
 from app.controllers.buyer import BuyerController
 from app.middleware.auth_middleware import AuthHandler
@@ -9,6 +9,9 @@ from bson import ObjectId
 from pydantic import BaseModel
 import urllib.parse
 from datetime import datetime
+import json
+from app.services.secure_document_service import SecureDocumentService
+from app.controllers.secure_document_controller import SecureDocumentController
 
 # Define a Pydantic model for document requests
 class DocumentRequestData(BaseModel):
@@ -296,178 +299,155 @@ async def list_my_document_requests(
         raise HTTPException(status_code=500, detail=f"Failed to list document requests: {str(e)}")
 
 @router.get("/property-document/{property_id}/{document_index}")
-async def get_buyer_property_document(
-    property_id: str, 
-    document_index: int, 
-    response: Response,
-    token: Optional[str] = None,
+async def get_property_document(
+    property_id: str = Path(..., description="ID of the property"),
+    document_index: int = Path(..., description="Index of the document in the property's documents array"),
+    token: str = Query(..., description="JWT token for authentication"),
     request: Request = None,
-    current_user: Optional[dict] = Depends(AuthHandler.auth_wrapper_optional)
+    db=Depends(get_database)
 ):
     """
-    Get a specific property document by property ID and document index for buyers with access
+    Get a property document with decryption and watermarking for buyers
     """
     azure_storage = None
     
     try:
-        # If no user from auth header, try token from query param
-        if not current_user and token:
-            try:
-                current_user = AuthHandler.decode_token(token)
-                logging.info(f"Using token from query parameter")
-            except Exception as e:
-                logging.error(f"Invalid token in query parameter: {str(e)}")
-                raise HTTPException(status_code=401, detail="Invalid token")
-        
-        # If still no user, authentication failed
-        if not current_user:
-            logging.error("No valid authentication provided")
-            raise HTTPException(status_code=401, detail="Authentication required")
-        
-        if current_user.get('type') != 'buyer':
-            logging.error(f"Access denied: User type is {current_user.get('type')}, expected 'buyer'")
-            raise HTTPException(status_code=403, detail="Only buyers can access documents")
+        # Verify token and get buyer info
+        try:
+            buyer = AuthHandler.decode_token(token)
+            if not buyer or buyer.get('type') != 'buyer':
+                raise HTTPException(status_code=401, detail="Invalid or expired token")
+        except Exception as e:
+            logging.error(f"Token verification failed: {str(e)}")
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
             
-        logging.info(f"Buyer {current_user['sub']} requesting document {document_index} for property {property_id}")
-            
-        # Check if the buyer has access
-        db = await get_database()
-        document_requests_collection = db['document_requests']
-        
-        # Check if the buyer has an approved request
-        access_request = await document_requests_collection.find_one({
-            'property_id': property_id,
-            'buyer_id': current_user['sub'],
-            'status': 'approved'
-        })
-        
-        if not access_request:
-            logging.error(f"Access denied: Buyer {current_user['sub']} has no approved request for property {property_id}")
-            raise HTTPException(status_code=403, detail="You do not have access to this document")
-        
-        # Check if the access has expired (if expiry_date is set)
-        if access_request.get('expiry_date') and datetime.utcnow() > access_request['expiry_date']:
-            logging.error(f"Access denied: Buyer's access has expired for property {property_id}")
-            raise HTTPException(status_code=403, detail="Your document access has expired")
-        
-        # Get the property details to get document URLs
-        properties_collection = db['properties']
-        property_doc = await properties_collection.find_one({'id': property_id})
-        if not property_doc:
-            logging.error(f"Property {property_id} not found")
+        # Get property from database using the property_id directly
+        property_data = await db.properties.find_one({"id": property_id})
+        if not property_data:
             raise HTTPException(status_code=404, detail="Property not found")
-        
-        # Check if the document exists
-        if not property_doc.get('documents') or len(property_doc['documents']) <= document_index:
-            logging.error(f"Document index {document_index} not found for property {property_id}")
+            
+        # Check if document exists
+        if not property_data.get('documents') or document_index >= len(property_data['documents']):
             raise HTTPException(status_code=404, detail="Document not found")
+            
+        property_doc = property_data['documents'][document_index]
+        logging.info(f"Retrieved property document info: {json.dumps(property_doc, default=str)}")
         
-        # Get the document data
-        document_data = property_doc['documents'][document_index]
-        logging.info(f"Document data type: {type(document_data)}")
-        
-        # Create Azure storage service
+        # Initialize Azure storage
         azure_storage = AzureStorageService()
         
-        # Get document URL - handle both string and dictionary formats
-        document_url = None
-        if isinstance(document_data, str):
-            document_url = document_data
-            logging.info(f"Document URL is a direct string: {document_url}")
-        elif isinstance(document_data, dict) and 'url' in document_data:
-            document_url = document_data.get('url')
-            logging.info(f"Document URL extracted from dictionary: {document_url}")
-        else:
-            logging.error(f"Unexpected document_data format: {type(document_data)}")
-            raise HTTPException(status_code=404, detail="Document URL not found")
+        # Get the encrypted document URL and document ID
+        encrypted_url = property_doc.get('encrypted_url')
+        document_id = property_doc.get('document_id')
+        
+        if not encrypted_url or not document_id:
+            raise HTTPException(status_code=404, detail="Encrypted document information not found")
+        
+        # Initialize the secure document service for decryption
+        secure_doc_service = SecureDocumentService(azure_storage)
+        
+        try:
+            # Use SecureDocumentService to retrieve and decrypt the document
+            logging.info(f"Using SecureDocumentService to retrieve document: {document_id}")
             
-        if not document_url:
-            logging.error(f"Document URL is empty")
-            raise HTTPException(status_code=404, detail="Document URL not found")
+            # First get the decrypted document
+            document_content = await secure_doc_service.retrieve_document(
+                document_id=document_id,
+                owner_id=property_data['seller_id'],
+                property_id=property_id
+            )
             
-        # Extract container and blob
-        container_name = azure_storage.container_property_docs
-        
-        # Extract blob name from URL
-        url_parts = document_url.split('/')
-        blob_name = url_parts[-1].split('?')[0]  # Remove SAS token
-        
-        if not blob_name:
-            logging.error(f"No valid blob name found for property {property_id}, document index {document_index}")
-            raise HTTPException(status_code=404, detail="Document blob not found")
-        
-        # URL decode the blob name
-        blob_name = urllib.parse.unquote(blob_name)
-        
-        logging.info(f"Buyer retrieving property document: container={container_name}, blob={blob_name}")
-        
-        # Get blob service client
-        blob_service_client = await azure_storage.get_blob_service_client()
-        
-        # Get blob client
-        blob_client = blob_service_client.get_blob_client(
-            container=container_name,
-            blob=blob_name
-        )
-        
-        # Download blob
-        download_stream = await blob_client.download_blob()
-        content = await download_stream.readall()
-        
-        # Get filename from document data or use blob name
-        filename = None
-        if isinstance(document_data, dict):
-            filename = document_data.get('filename', blob_name)
-        else:
-            filename = blob_name
+            if not document_content or len(document_content) == 0:
+                logging.error(f"Empty document content received")
+                raise HTTPException(status_code=500, detail="Document content is empty")
             
-        # Determine content type based on file extension
-        content_type = "application/octet-stream"  # Default
-        is_word_doc = False
-        
-        if blob_name.lower().endswith('.pdf'):
-            content_type = "application/pdf"
-        elif blob_name.lower().endswith('.doc'):
-            content_type = "application/msword"
-            is_word_doc = True
-        elif blob_name.lower().endswith('.docx'):
-            content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            is_word_doc = True
-        
-        # Special handling for Word documents
-        if is_word_doc:
-            # Force binary output for Word documents
-            response.headers["Content-Transfer-Encoding"] = "binary"
-            # Prevent content sniffing
-            response.headers["X-Content-Type-Options"] = "nosniff"
-            # No caching for documents
-            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
-        else:
-            # Set cache headers for non-Word documents
-            response.headers["Cache-Control"] = "public, max-age=3600"
-        
-        # Ensure the filename is properly set
-        clean_filename = filename.split('/')[-1]  # Remove any path components
-        # Remove any special characters that might cause issues
-        clean_filename = ''.join(c for c in clean_filename if c.isalnum() or c in '._- ')
-        
-        # Log what we're sending back
-        logging.info(f"Serving document with content type: {content_type}, filename: {clean_filename}")
-        
-        # Set the Content-Disposition header to force download
-        response.headers["Content-Disposition"] = f'attachment; filename="{clean_filename}"'
-        
-        return Response(
-            content=content,
-            media_type=content_type
-        )
-    except HTTPException as he:
-        raise he
+            # Get document name from metadata
+            document_name = property_doc.get('document_name', f"document_{document_index}")
+            
+            # Ensure filename has extension
+            if '.' not in document_name:
+                content_type = property_doc.get('content_type', 'application/octet-stream')
+                if content_type == 'application/pdf':
+                    document_name += '.pdf'
+                elif content_type == 'image/jpeg':
+                    document_name += '.jpg'
+                elif content_type == 'image/png':
+                    document_name += '.png'
+                else:
+                    document_name += '.bin'
+            
+            # Determine content type based on file extension
+            content_type = property_doc.get('content_type', 'application/octet-stream')
+            if not content_type or content_type == 'application/octet-stream':
+                if document_name.lower().endswith('.pdf'):
+                    content_type = 'application/pdf'
+                elif document_name.lower().endswith(('.jpg', '.jpeg')):
+                    content_type = 'image/jpeg'
+                elif document_name.lower().endswith('.png'):
+                    content_type = 'image/png'
+                else:
+                    content_type = 'application/octet-stream'
+            
+            logging.info(f"Document content type: {content_type}, size: {len(document_content)} bytes")
+            
+            # For PDF files, check if they start with the PDF signature
+            if content_type == 'application/pdf' and not document_content.startswith(b'%PDF'):
+                # Try to find PDF signature
+                pdf_start = document_content.find(b'%PDF')
+                if pdf_start > 0:
+                    logging.warning(f"PDF document corrupt, repairing by removing {pdf_start} bytes from start")
+                    document_content = document_content[pdf_start:]
+            
+            # Now apply security features with SecureDocumentController
+            from app.controllers.document_access import secure_document_controller
+            
+            # Apply watermark and other security features to the document
+            try:
+                document_type = property_doc.get('type', 'unknown')
+                secured_content, metadata = await secure_document_controller.get_secure_document(
+                    content=document_content,
+                    content_type=content_type,
+                    buyer_id=buyer['sub'],
+                    property_id=property_id,
+                    document_index=document_index,
+                    document_type=document_type,
+                    request=request
+                )
+                
+                # Use the watermarked content if successful
+                if secured_content and len(secured_content) > 0:
+                    logging.info(f"Successfully applied security features: {metadata}")
+                    document_content = secured_content
+                else:
+                    logging.warning("Failed to apply security features, using original content")
+            except Exception as sec_error:
+                logging.error(f"Error applying security features: {str(sec_error)}")
+                # Continue with original content if security application fails
+            
+            # Return the document with appropriate headers
+            response = Response(
+                content=document_content,
+                media_type=content_type,
+                headers={
+                    "Content-Disposition": f"attachment; filename=\"{document_name}\"",
+                    "Content-Type": content_type,
+                    "Content-Length": str(len(document_content)),
+                    "Cache-Control": "no-cache"
+                }
+            )
+            
+            logging.info(f"Successfully prepared document response: {document_name}")
+            return response
+            
+        except Exception as e:
+            logging.error(f"Error retrieving document: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error retrieving document: {str(e)}")
+            
+    except HTTPException:
+        raise
     except Exception as e:
-        logging.error(f"Error serving property document to buyer: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve document: {str(e)}")
+        logging.error(f"Error in get_property_document: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         if azure_storage:
             await azure_storage.close()

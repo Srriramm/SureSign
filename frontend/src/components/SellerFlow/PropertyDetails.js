@@ -14,6 +14,17 @@ function PropertyDetails() {
   const [documentsVisible, setDocumentsVisible] = useState(false);
   const [documentRequests, setDocumentRequests] = useState([]);
   const [unlockingDocuments, setUnlockingDocuments] = useState(false);
+  const [notification, setNotification] = useState({ message: '', type: '' });
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  // Function to show notification
+  const showNotification = (message, type = 'info') => {
+    setNotification({ message, type });
+    // Auto-clear notification after 5 seconds
+    setTimeout(() => {
+      setNotification({ message: '', type: '' });
+    }, 5000);
+  };
 
   useEffect(() => {
     const fetchPropertyDetails = async () => {
@@ -105,11 +116,18 @@ function PropertyDetails() {
     }
   }, [documentsVisible]);
 
+  // Add debug logging for component state
+  useEffect(() => {
+    console.log('Selected Image Index:', selectedImageIndex);
+    console.log('Documents Visible:', documentsVisible);
+  }, [selectedImageIndex, documentsVisible]);
+
   const handleGoBack = () => {
     navigate('/list-properties');
   };
 
   const handleImageClick = (index) => {
+    console.log('Image clicked:', index);
     setSelectedImageIndex(index);
   };
 
@@ -182,17 +200,11 @@ function PropertyDetails() {
 
   // Update document visibility toggle to handle token expiration
   const toggleDocumentVisibility = async () => {
+    console.log('Toggle document visibility clicked');
+    console.log('Current visibility state:', documentsVisible);
+    
     try {
       setUnlockingDocuments(true);
-      await handleDocumentOperation(async (token) => {
-        return fetch(`http://localhost:8000/seller/property/${propertyId}/toggle-documents`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-      });
-      
       setDocumentsVisible(!documentsVisible);
     } catch (err) {
       console.error('Error toggling document visibility:', err);
@@ -203,22 +215,112 @@ function PropertyDetails() {
   };
 
   // Update document download to handle token expiration
-  const handleDocumentDownload = async (doc, index, e) => {
-    e.preventDefault();
-    
+  const handleDocumentDownload = async (doc, index) => {
     if (!documentsVisible) {
       console.log('Document access blocked - toggle visibility first');
       return;
     }
     
+    setIsDownloading(true);
+    showNotification('Starting document download...', 'info');
+    
     try {
-      await handleDocumentOperation(async (token) => {
-        const downloadUrl = `http://localhost:8000/seller/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}`;
-        window.open(downloadUrl, '_blank');
+      const token = getToken('seller');
+      if (!token) {
+        console.error('No token found for document download');
+        showNotification('Authentication error. Please log in again.', 'error');
+        setIsDownloading(false);
+        return;
+      }
+
+      // Get the document name
+      const filename = doc.document_name || `document_${index}.pdf`;
+      
+      // Create the download URL using the new endpoint
+      const downloadUrl = `http://localhost:8000/seller/property/${propertyId}/document/${index}/download`;
+      
+      showNotification(`Downloading ${filename}...`, 'info');
+      
+      // Fetch the document with authorization header
+      const response = await fetch(downloadUrl, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          console.error('Token has expired');
+          showNotification('Your session has expired. Please log in again.', 'error');
+          clearAuthData('seller');
+          navigate('/login/seller');
+          return;
+        }
+        
+        if (response.status === 404) {
+          console.error('Document not found');
+          showNotification('Document not found. Attempting recovery...', 'warning');
+          
+          // Try the recovery endpoint
+          console.log('Attempting document recovery...');
+          
+          const recoveryUrl = `http://localhost:8000/seller/property/${propertyId}/document/${index}/recover`;
+          const recoveryResponse = await fetch(recoveryUrl, {
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          });
+          
+          if (!recoveryResponse.ok) {
+            throw new Error('Failed to recover and download document');
+          }
+          
+          showNotification('Document recovered successfully!', 'success');
+          
+          // Get the blob from the recovery response
+          const blob = await recoveryResponse.blob();
+          
+          // Create a download link
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          
+          // Cleanup
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+          setIsDownloading(false);
+          return;
+        }
+        
+        throw new Error(`Failed to download document: ${response.status}`);
+      }
+
+      // Get the blob from the response
+      const blob = await response.blob();
+      
+      // Create a download link
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      
+      // Cleanup
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      showNotification(`Successfully downloaded ${filename}`, 'success');
+      
     } catch (err) {
       console.error('Error downloading document:', err);
+      showNotification(`Download failed: ${err.message}`, 'error');
       setError('Failed to download document');
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -273,6 +375,45 @@ function PropertyDetails() {
     }
   };
 
+  // Update the document item render to use the new download handler
+  const renderDocumentItem = (doc, index) => {
+    const filename = doc.document_name || `document_${index}.pdf`;
+    const docType = getDocumentTypeLabel(doc.type || 'Document');
+    
+    // Determine document icon based on file extension
+    let documentIcon = '📄';
+    if (filename.toLowerCase().endsWith('.pdf')) {
+      documentIcon = '📑';
+    } else if (filename.toLowerCase().endsWith('.jpg') || 
+               filename.toLowerCase().endsWith('.jpeg') || 
+               filename.toLowerCase().endsWith('.png')) {
+      documentIcon = '🖼️';
+    } else if (filename.toLowerCase().endsWith('.docx') || 
+               filename.toLowerCase().endsWith('.doc')) {
+      documentIcon = '📝';
+    }
+    
+    return (
+      <div key={index} className="document-item">
+        <div className="document-icon">
+          <i className="document-type-icon">{documentIcon}</i>
+        </div>
+        <div className="document-info">
+          <span className="document-title">{docType}</span>
+          <span className="document-filename">{filename}</span>
+        </div>
+        <button 
+          className={`download-btn ${isDownloading ? 'loading' : ''}`}
+          disabled={!documentsVisible || isDownloading}
+          onClick={() => handleDocumentDownload(doc, index)}
+          title="Download original document from secure storage"
+        >
+          Download Original
+        </button>
+      </div>
+    );
+  };
+
   if (loading) return (
     <div className="loading-container">
       <div className="loading-spinner"></div>
@@ -323,6 +464,19 @@ function PropertyDetails() {
         </div>
       </header>
 
+      {/* Notification component */}
+      {notification.message && (
+        <div className={`notification ${notification.type}`}>
+          <span className="notification-message">{notification.message}</span>
+          <button 
+            className="close-notification" 
+            onClick={() => setNotification({ message: '', type: '' })}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <main className="container full-width">
         <div className="property-content">
           {/* Property images section */}
@@ -339,17 +493,18 @@ function PropertyDetails() {
             {hasImages && property.images.length > 1 && (
               <div className="thumbnail-gallery">
                 {property.images.map((image, index) => (
-                  <div 
+                  <button 
                     key={index} 
                     className={`thumbnail ${index === selectedImageIndex ? 'selected' : ''}`}
                     onClick={() => handleImageClick(index)}
+                    type="button"
                   >
                     <img 
                       src={getPublicImageUrl(index)} 
-                      alt={`Property ${index + 1}`}
+                      alt={`Property view ${index + 1}`}
                       onError={handleImageError}
                     />
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
@@ -394,236 +549,41 @@ function PropertyDetails() {
               <div className="property-documents">
                 <div className="documents-header">
                   <h3>Property Documents</h3>
-                  <div className="toggle-button-container">
-                    <button 
-                      className={`toggle-visibility-btn ${documentsVisible ? 'visible' : ''}`}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        console.log('Eye button clicked');
-                        toggleDocumentVisibility();
-                      }}
-                      aria-label={documentsVisible ? "Hide Documents" : "Show Documents"}
-                      title={documentsVisible ? "Click to Hide Documents" : "Click to View Documents"}
+                  <button 
+                    type="button"
+                    className={`toggle-visibility-btn ${documentsVisible ? 'visible' : ''}`}
+                    onClick={toggleDocumentVisibility}
+                    style={{ cursor: 'pointer', zIndex: 1000 }}
+                  >
+                    <svg 
+                      xmlns="http://www.w3.org/2000/svg" 
+                      width="24" 
+                      height="24" 
+                      viewBox="0 0 24 24" 
+                      fill="none" 
+                      stroke="currentColor" 
+                      strokeWidth="2" 
+                      strokeLinecap="round" 
+                      strokeLinejoin="round"
+                      style={{ pointerEvents: 'none' }}
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        {documentsVisible ? (
-                          <>
-                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                            <circle cx="12" cy="12" r="3"></circle>
-                          </>
-                        ) : (
-                          <>
-                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                            <line x1="1" y1="1" x2="23" y2="23"></line>
-                          </>
-                        )}
-                      </svg>
-                      {unlockingDocuments && <span className="spinner-dots"></span>}
-                    </button>
-                  </div>
+                      {documentsVisible ? (
+                        <>
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                          <circle cx="12" cy="12" r="3" />
+                        </>
+                      ) : (
+                        <>
+                          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                          <line x1="1" y1="1" x2="23" y2="23" />
+                        </>
+                      )}
+                    </svg>
+                  </button>
                 </div>
                 
-                {/* Fallback text button in case the eye icon doesn't work */}
-                <button 
-                  className="fallback-toggle-btn"
-                  onClick={toggleDocumentVisibility}
-                >
-                  {documentsVisible ? "Hide Documents" : "Show Documents"}
-                </button>
-                
                 <div className={`documents-list ${documentsVisible ? '' : 'blurred'}`}>
-                  {property.documents.map((doc, index) => {
-                    // Get original filename and extract the extension
-                    let filename = '';
-                    let fileExtension = '.docx'; // Default to docx as it's common
-                    
-                    if (typeof doc.filename === 'string' && doc.filename) {
-                      // Extract just the filename portion without path or extra data
-                      const lastPart = doc.filename.split('_').pop();
-                      filename = lastPart.replace(/[\[\]]/g, '');
-                      
-                      // Get extension if it exists
-                      if (filename.includes('.')) {
-                        fileExtension = '.' + filename.split('.').pop();
-                      }
-                    } else if (typeof doc === 'object' && doc.url && typeof doc.url === 'string') {
-                      const urlParts = doc.url.split('/').pop().split('?')[0];
-                      filename = urlParts;
-                      
-                      // Get extension if it exists
-                      if (filename.includes('.')) {
-                        fileExtension = '.' + filename.split('.').pop();
-                      }
-                    } else {
-                      // Create a filename based on document type if available
-                      const docType = doc.type || 'document';
-                      filename = `${docType.toLowerCase().replace(/\s+/g, '-')}-${index}${fileExtension}`;
-                    }
-                    
-                    // Ensure filename has the correct extension
-                    if (!filename.toLowerCase().endsWith(fileExtension.toLowerCase())) {
-                      filename = `${filename}${fileExtension}`;
-                    }
-                    
-                    // Get token for auth
-                    const token = localStorage.getItem('token') || localStorage.getItem('seller_token');
-                    
-                    // Determine document type icon
-                    let docIcon = '📄';
-                    if (fileExtension.toLowerCase() === '.pdf') {
-                      docIcon = '📕';
-                    } else if (fileExtension.toLowerCase() === '.doc' || fileExtension.toLowerCase() === '.docx') {
-                      docIcon = '📝';
-                    }
-                    
-                    return (
-                      <div key={index} className="document-item">
-                        <div className="document-icon">
-                          <i className="document-type-icon">{docIcon}</i>
-                        </div>
-                        <div className="document-info">
-                          <span className="document-title">{getDocumentTypeLabel(doc.type || doc.document_type)}</span>
-                          <span className="document-filename">{filename}</span>
-                        </div>
-                        <button 
-                          className="download-btn"
-                          disabled={!documentsVisible}
-                          onClick={(e) => {
-                            if (!documentsVisible) {
-                              console.log('Document access blocked - toggle visibility first');
-                              return;
-                            }
-                            
-                            // Show options to the user
-                            const downloadOptions = document.createElement('div');
-                            downloadOptions.className = 'download-options';
-                            downloadOptions.innerHTML = `
-                              <div class="download-options-inner">
-                                <h4>Document Access Options</h4>
-                                <p>Select how you want to access the document:</p>
-                                <button class="download-option-btn original">Download Original</button>
-                                <button class="download-option-btn verified">Download with Verification</button>
-                                <button class="download-option-btn view">View in Browser</button>
-                                <button class="download-option-btn cancel">Cancel</button>
-                              </div>
-                            `;
-                            
-                            // Style the options modal
-                            const style = document.createElement('style');
-                            style.textContent = `
-                              .download-options {
-                                position: fixed;
-                                top: 0;
-                                left: 0;
-                                right: 0;
-                                bottom: 0;
-                                background: rgba(0,0,0,0.7);
-                                display: flex;
-                                align-items: center;
-                                justify-content: center;
-                                z-index: 1000;
-                              }
-                              .download-options-inner {
-                                background: white;
-                                padding: 20px;
-                                border-radius: 8px;
-                                max-width: 400px;
-                                width: 100%;
-                                text-align: center;
-                              }
-                              .download-option-btn {
-                                display: block;
-                                width: 100%;
-                                padding: 10px;
-                                margin: 10px 0;
-                                border: none;
-                                border-radius: 4px;
-                                cursor: pointer;
-                              }
-                              .download-option-btn.original {
-                                background: #2563eb;
-                                color: white;
-                              }
-                              .download-option-btn.verified {
-                                background: #10b981;
-                                color: white;
-                              }
-                              .download-option-btn.view {
-                                background: #9ca3af;
-                                color: white;
-                              }
-                              .download-option-btn.cancel {
-                                background: #f3f4f6;
-                                color: #111827;
-                              }
-                            `;
-                            
-                            document.head.appendChild(style);
-                            document.body.appendChild(downloadOptions);
-                            
-                            // Handle option clicks
-                            const originalBtn = downloadOptions.querySelector('.original');
-                            const verifiedBtn = downloadOptions.querySelector('.verified');
-                            const viewBtn = downloadOptions.querySelector('.view');
-                            const cancelBtn = downloadOptions.querySelector('.cancel');
-                            
-                            // Download original document (for admin/debug use)
-                            originalBtn.addEventListener('click', () => {
-                              const timestamp = new Date().getTime();
-                              const url = `http://localhost:8000/seller/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}&filename=${encodeURIComponent(filename)}&t=${timestamp}&raw=true`;
-                              
-                              const link = document.createElement('a');
-                              link.href = url;
-                              link.setAttribute('download', filename);
-                              document.body.appendChild(link);
-                              link.click();
-                              document.body.removeChild(link);
-                              
-                              document.body.removeChild(downloadOptions);
-                              document.head.removeChild(style);
-                            });
-                            
-                            // Download document with verification certificate
-                            verifiedBtn.addEventListener('click', () => {
-                              const timestamp = new Date().getTime();
-                              const url = `http://localhost:8000/seller/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}&filename=${encodeURIComponent(filename)}&t=${timestamp}&verified=true`;
-                              
-                              const link = document.createElement('a');
-                              link.href = url;
-                              link.setAttribute('download', filename);
-                              document.body.appendChild(link);
-                              link.click();
-                              document.body.removeChild(link);
-                              
-                              document.body.removeChild(downloadOptions);
-                              document.head.removeChild(style);
-                            });
-                            
-                            viewBtn.addEventListener('click', () => {
-                              // View in browser option
-                              const timestamp = new Date().getTime();
-                              const url = `http://localhost:8000/seller/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}&filename=${encodeURIComponent(filename)}&t=${timestamp}&view=true`;
-                              
-                              window.open(url, '_blank');
-                              
-                              // Remove the options
-                              document.body.removeChild(downloadOptions);
-                              document.head.removeChild(style);
-                            });
-                            
-                            cancelBtn.addEventListener('click', () => {
-                              // Remove the options
-                              document.body.removeChild(downloadOptions);
-                              document.head.removeChild(style);
-                            });
-                          }}
-                        >
-                          Download
-                        </button>
-                      </div>
-                    );
-                  })}
+                  {property.documents.map((doc, index) => renderDocumentItem(doc, index))}
                 </div>
               </div>
             )}

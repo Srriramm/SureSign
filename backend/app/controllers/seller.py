@@ -8,7 +8,7 @@ from azure.core.exceptions import AzureError
 from app.middleware.auth_middleware import AuthHandler
 from app.config.db import get_database
 from app.blockchain.smart_contract import BlockchainService
-from app.utils.encryption import FileEncryptor
+from app.services.secure_document_service import SecureDocumentService
 from app.config.azure_config import AzureStorageService
 import urllib.parse
 
@@ -17,7 +17,7 @@ class PropertyListingController:
         self.auth_handler = AuthHandler()
         self.blockchain_service = None
         self.azure_storage = AzureStorageService()
-        self.file_encryptor = FileEncryptor()
+        self.secure_document_service = SecureDocumentService(self.azure_storage)
 
     async def list_seller_properties(self, token_payload):
         """
@@ -128,77 +128,54 @@ class PropertyListingController:
             if hasattr(self, 'azure_storage') and self.azure_storage is not None:
                 await self.azure_storage.close()
 
-    async def upload_property_documents(self, seller_id: str, documents: List[UploadFile], document_types: List[str]):
+    async def upload_property_documents(self, seller_id: str, property_id: str, documents: List[UploadFile], document_types: List[str]):
         """
-        Upload property documents to Azure Blob Storage with blockchain verification
-        but without encryption for common document formats to ensure readability
+        Upload property documents to Azure Blob Storage with encryption and blockchain verification
         """
-        document_urls = []
-        document_hashes = []
+        document_metadata_list = []
         
         try:
-            # Ensure blockchain service is initialized
+            # Initialize services if not already done
             if not self.blockchain_service:
                 self.blockchain_service = await BlockchainService.create()
             
             for doc, doc_type in zip(documents, document_types):
-                # Read document file
-                doc_content = await doc.read()
-                
-                # Calculate document hash for blockchain verification 
-                # (do this before any modifications to the content)
-                document_hash = self.file_encryptor.hash_data(doc_content)
-                
-                # Determine if this document should be encrypted
-                # Common document formats (Word, PDF, etc.) should not be encrypted
-                # as it prevents them from being opened directly
-                should_encrypt = False
-                filename_lower = doc.filename.lower()
-                
-                # Do not encrypt document formats that need to be directly readable
-                if not (filename_lower.endswith('.doc') or 
-                        filename_lower.endswith('.docx') or 
-                        filename_lower.endswith('.pdf') or 
-                        filename_lower.endswith('.txt')):
-                    # Only encrypt non-standard document formats
-                    should_encrypt = True
-                
-                # Process document content
-                processed_content = doc_content
-                if should_encrypt:
-                    # If encryption is needed, encrypt the document
-                    processed_content = self.file_encryptor.encrypt_data(doc_content)
-                    logging.info(f"Document {doc.filename} was encrypted before upload")
-                else:
-                    logging.info(f"Document {doc.filename} was stored without encryption for readability")
-                
-                # Generate unique filename
-                filename = f"{seller_id}_{datetime.now().timestamp()}_{doc.filename}"
-                
-                # Upload to Azure Blob Storage (property_documents container)
-                blob_url = await self.azure_storage.upload_file(
-                    container_name=self.azure_storage.container_property_docs, 
-                    file_name=filename, 
-                    file_content=processed_content  # This is either encrypted or original content
-                )
-                
-                # Store hash on blockchain for verification
-                blockchain_tx_hash = await self.blockchain_service.store_document_hash(document_hash)
-                
-                document_urls.append({
-                    'url': blob_url,
-                    'type': doc_type,
-                    'filename': filename,
-                    'blockchain_tx_hash': blockchain_tx_hash,
-                    'encrypted': should_encrypt  # Add flag to indicate if document is encrypted
-                })
-                
-                document_hashes.append(document_hash)
+                try:
+                    # Read document file
+                    doc_content = await doc.read()
+                    
+                    # Process document using SecureDocumentService with blockchain integration
+                    doc_metadata = await self.secure_document_service.process_document(
+                        document_data=doc_content,
+                        document_name=doc.filename,
+                        owner_id=seller_id,
+                        content_type=doc.content_type,
+                        property_id=property_id,  # Pass property_id to process_document
+                        blockchain_service=self.blockchain_service
+                    )
+                    
+                    # Add document type to metadata
+                    doc_metadata['type'] = doc_type
+                    document_metadata_list.append(doc_metadata)
+                    
+                except Exception as e:
+                    logging.error(f"Error processing document {doc.filename}: {str(e)}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to process document {doc.filename}: {str(e)}"
+                    )
             
-            return document_urls, document_hashes
+            return document_metadata_list
+            
+        except Exception as e:
+            logging.error(f"Error uploading property documents: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to upload documents: {str(e)}"
+            )
         finally:
-            # Ensure we close the Azure storage client after all operations
-            if hasattr(self, 'azure_storage') and self.azure_storage is not None:
+            # Close any open connections
+            if self.azure_storage:
                 await self.azure_storage.close()
 
     async def create_property_listing(
@@ -219,6 +196,9 @@ class PropertyListingController:
         db = await get_database()
         
         try:
+            # Generate a unique identifier for the property
+            unique_property_id = str(uuid.uuid4())
+            
             # Upload images
             encrypted_image_urls = await self.upload_property_images(
                 token_payload['sub'], 
@@ -226,19 +206,20 @@ class PropertyListingController:
             )
             
             # Upload documents
-            document_urls, document_hashes = await self.upload_property_documents(
-                token_payload['sub'], 
+            document_metadata_list = await self.upload_property_documents(
+                token_payload['sub'],
+                unique_property_id,
                 documents,
                 document_types
-            )
+            ) if documents and document_types else []
             
-            # Generate a unique identifier for the property
-            unique_property_id = str(uuid.uuid4())
+            # Extract document hashes for blockchain verification
+            document_hashes = [doc['document_hash'] for doc in document_metadata_list]
             
             # Prepare property listing data
             property_listing = {
                 'id': unique_property_id,
-                'seller_id': token_payload['sub'],  # Add seller_id reference
+                'seller_id': token_payload['sub'],
                 'property_type': property_type,
                 'square_feet': square_feet,
                 'price': price,
@@ -246,31 +227,28 @@ class PropertyListingController:
                 'description': description,
                 'location': location,
                 'images': encrypted_image_urls,
-                'documents': document_urls,
+                'documents': document_metadata_list,
                 'document_hashes': document_hashes,
                 'created_at': datetime.utcnow(),
                 'updated_at': datetime.utcnow(),
-                'status': 'LIVE'
+                'status': 'LIVE'  # Default status
             }
             
-            # Insert into the properties collection
+            # Insert into database
             properties_collection = db['properties']
-            result = await properties_collection.insert_one(property_listing)
+            await properties_collection.insert_one(property_listing)
             
-            if not result.inserted_id:
-                raise HTTPException(status_code=500, detail="Failed to create property listing")
+            # Convert ObjectId to string for response
+            property_listing['_id'] = str(property_listing['_id'])
             
-            # Convert MongoDB ObjectId to string in the response
-            property_listing['_id'] = str(result.inserted_id)
+            return property_listing
             
-            return {
-                "message": "Property listed successfully", 
-                "property": property_listing
-            }
-        finally:
-            # Ensure we close the Azure storage client after all operations
-            if hasattr(self, 'azure_storage') and self.azure_storage is not None:
-                await self.azure_storage.close()
+        except Exception as e:
+            logging.error(f"Error creating property listing: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create property listing: {str(e)}"
+            )
 
     async def update_property_listing(
         self, token_payload, property_id: str,
@@ -330,13 +308,13 @@ class PropertyListingController:
                 if len(documents) != len(document_types):
                     raise HTTPException(status_code=400, detail="Number of documents must match document types")
                     
-                document_urls, document_hashes = await self.upload_property_documents(
+                document_metadata_list = await self.upload_property_documents(
                     token_payload['sub'],
+                    property_id,
                     documents,
                     document_types
                 )
-                update_fields['documents'] = document_urls
-                update_fields['document_hashes'] = document_hashes
+                update_fields['documents'] = document_metadata_list
             
             # Add timestamp
             update_fields['updated_at'] = datetime.utcnow()
@@ -423,17 +401,17 @@ class PropertyListingController:
                 )
             
             # Upload new documents
-            document_urls, document_hashes = await self.upload_property_documents(
+            document_metadata_list = await self.upload_property_documents(
                 token_payload['sub'],
+                property_id,
                 documents,
                 document_types
             )
             
             # Update the property with new documents
             existing_documents = property_doc.get('documents', [])
-            existing_hashes = property_doc.get('document_hashes', [])
             
-            # Add new documents and hashes
+            # Add new documents
             result = await properties_collection.update_one(
                 {'id': property_id, 'seller_id': token_payload['sub']},
                 {
@@ -441,8 +419,7 @@ class PropertyListingController:
                         'updated_at': datetime.utcnow()
                     },
                     '$push': {
-                        'documents': {'$each': document_urls},
-                        'document_hashes': {'$each': document_hashes}
+                        'documents': {'$each': document_metadata_list}
                     }
                 }
             )
@@ -455,7 +432,7 @@ class PropertyListingController:
             
             return {
                 "message": "Documents uploaded successfully",
-                "added_documents": len(document_urls)
+                "added_documents": len(document_metadata_list)
             }
         finally:
             # Ensure we close the Azure storage client after all operations
