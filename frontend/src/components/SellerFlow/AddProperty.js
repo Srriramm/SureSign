@@ -17,12 +17,15 @@ function AddProperty() {
     legalDocuments: [],
     documentTypes: [],
     images: [],
-    secureFilenames: []
+    secureFilenames: [],
+    surveyNumber: '',
+    plotSize: '',
+    address: '',
+    price: ''
   });
   const [previewImages, setPreviewImages] = useState([]);
   const [errors, setErrors] = useState({});
   const [documentType, setDocumentType] = useState('');
-  const [propertyId, setPropertyId] = useState(null);
 
   // Add useEffect to check token on component mount
   useEffect(() => {
@@ -163,28 +166,28 @@ function AddProperty() {
   const validateStep2 = () => {
     const newErrors = {};
 
-    if (!propertyData.location.trim()) {
-      newErrors.location = "Location is required";
+    if (!propertyData.surveyNumber.trim()) {
+      newErrors.surveyNumber = "Survey Number is required";
     }
 
-    if (!propertyData.area.trim()) {
-      newErrors.area = "Area is required";
+    if (!propertyData.plotSize) {
+      newErrors.plotSize = "Plot Size is required";
+    } else if (isNaN(propertyData.plotSize) || propertyData.plotSize <= 0) {
+      newErrors.plotSize = "Please enter a valid plot size";
     }
 
-    if (!propertyData.squareFeet) {
-      newErrors.squareFeet = "Square feet is required";
-    } else if (isNaN(propertyData.squareFeet) || propertyData.squareFeet <= 0) {
-      newErrors.squareFeet = "Please enter a valid area";
+    if (!propertyData.address.trim()) {
+      newErrors.address = "Address is required";
     }
 
-    if (!propertyData.rate) {
-      newErrors.rate = "Rate is required";
-    } else if (isNaN(propertyData.rate) || propertyData.rate <= 0) {
-      newErrors.rate = "Please enter a valid rate";
+    if (!propertyData.price) {
+      newErrors.price = "Price is required";
+    } else if (isNaN(propertyData.price) || propertyData.price <= 0) {
+      newErrors.price = "Please enter a valid price";
     }
 
-    if (!propertyData.propertyType) {
-      newErrors.propertyType = "Property type is required";
+    if (propertyData.legalDocuments.length === 0) {
+      newErrors.documents = "At least one legal document is required";
     }
 
     setErrors(newErrors);
@@ -203,12 +206,15 @@ function AddProperty() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    console.log('Submit button clicked');
 
     if (!validateStep2()) {
+      console.log('Validation failed:', errors);
       return;
     }
 
     setLoading(true);
+    console.log('Starting form submission');
 
     try {
       const token = getToken('seller');
@@ -220,12 +226,12 @@ function AddProperty() {
 
       // Create FormData for the multipart/form-data request
       const formData = new FormData();
-      formData.append('property_type', propertyData.propertyType);
-      formData.append('square_feet', propertyData.squareFeet);
-      formData.append('price', propertyData.rate);
-      formData.append('area', propertyData.area);
-      formData.append('description', propertyData.description || '');
-      formData.append('location', propertyData.location);
+      
+      // Add land-specific fields
+      formData.append('survey_number', propertyData.surveyNumber);
+      formData.append('plot_size', propertyData.plotSize);
+      formData.append('address', propertyData.address);
+      formData.append('price', propertyData.price);
 
       // Add images
       propertyData.images.forEach(image => {
@@ -241,6 +247,15 @@ function AddProperty() {
         formData.append('document_types', type);
       });
 
+      console.log('Submitting form data:', {
+        survey_number: propertyData.surveyNumber,
+        plot_size: propertyData.plotSize,
+        address: propertyData.address,
+        price: propertyData.price,
+        images_count: propertyData.images.length,
+        documents_count: propertyData.legalDocuments.length
+      });
+
       // Send request to backend API
       const response = await fetch('http://localhost:8000/seller/property', {
         method: 'POST',
@@ -249,6 +264,8 @@ function AddProperty() {
         },
         body: formData
       });
+
+      console.log('Response status:', response.status);
 
       if (!response.ok) {
         if (response.status === 401) {
@@ -265,32 +282,13 @@ function AddProperty() {
       const responseData = await response.json();
       console.log('Property created successfully:', responseData);
       
-      // Store the property ID for potential image loading
+      // Navigate to property details page with the new property ID
       if (responseData.property && responseData.property.id) {
-        setPropertyId(responseData.property.id);
+        navigate(`/property-details/${responseData.property.id}`);
+      } else {
+        navigate('/list-properties');
       }
       
-      // If we have image filenames, store them for direct access
-      if (responseData.property && responseData.property.images && responseData.property.images.length > 0) {
-        const imageData = responseData.property.images.map(img => {
-          let secureFilename = null;
-          let container = 'property-images';
-          
-          if (img.url && img.url.secure_filename) {
-            secureFilename = img.url.secure_filename;
-            container = img.url.container || container;
-          }
-          
-          return { secureFilename, container };
-        });
-        
-        // We could store this data if needed for later use
-        console.log('Image data for direct access:', imageData);
-        setPropertyData({...propertyData, secureFilenames: imageData});
-      }
-      
-      alert('Property listed successfully!');
-      navigate('/list-properties');
     } catch (error) {
       console.error('Error listing property:', error);
       alert(`Failed to list property: ${error.message}`);
@@ -324,7 +322,7 @@ function AddProperty() {
         </div>
 
         <div className="form-card">
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} noValidate>
             {step === 1 && (
               <div className="form-step">
                 <h2>Upload Property Images</h2>
@@ -398,94 +396,66 @@ function AddProperty() {
             {step === 2 && (
               <div className="form-step">
                 <h2>Property Details</h2>
-                <p className="form-subtitle">Please provide details about your property</p>
+                <p className="form-subtitle">Please provide details about your land</p>
 
                 <div className="form-group">
-                  <label htmlFor="location">Location</label>
+                  <label htmlFor="surveyNumber">Survey Number</label>
                   <input
                     type="text"
-                    id="location"
-                    name="location"
-                    value={propertyData.location}
+                    id="surveyNumber"
+                    name="surveyNumber"
+                    value={propertyData.surveyNumber}
                     onChange={handleChange}
-                    className={errors.location ? 'form-control error' : 'form-control'}
-                    placeholder="Enter property location"
+                    className={errors.surveyNumber ? 'form-control error' : 'form-control'}
+                    placeholder="Enter survey number"
+                    required
                   />
-                  {errors.location && <p className="error-message">{errors.location}</p>}
+                  {errors.surveyNumber && <p className="error-message">{errors.surveyNumber}</p>}
                 </div>
 
                 <div className="form-group">
-                  <label htmlFor="area">Area/Neighborhood</label>
+                  <label htmlFor="plotSize">Plot Size (in sq.ft)</label>
                   <input
-                    type="text"
-                    id="area"
-                    name="area"
-                    value={propertyData.area}
+                    type="number"
+                    id="plotSize"
+                    name="plotSize"
+                    value={propertyData.plotSize}
                     onChange={handleChange}
-                    className={errors.area ? 'form-control error' : 'form-control'}
-                    placeholder="Enter area or neighborhood"
+                    className={errors.plotSize ? 'form-control error' : 'form-control'}
+                    placeholder="Enter plot size"
+                    required
                   />
-                  {errors.area && <p className="error-message">{errors.area}</p>}
+                  {errors.plotSize && <p className="error-message">{errors.plotSize}</p>}
                 </div>
 
                 <div className="form-group">
-                  <label htmlFor="propertyType">Property Type</label>
-                  <select
-                    id="propertyType"
-                    name="propertyType"
-                    value={propertyData.propertyType}
-                    onChange={handleChange}
-                    className={errors.propertyType ? 'form-control error' : 'form-control'}
-                  >
-                    <option value="">Select property type</option>
-                    <option value="Residential">Residential</option>
-                    <option value="Commercial">Commercial</option>
-                    <option value="Land">Land</option>
-                  </select>
-                  {errors.propertyType && <p className="error-message">{errors.propertyType}</p>}
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group">
-                    <label htmlFor="squareFeet">Square Feet</label>
-                    <input
-                      type="number"
-                      id="squareFeet"
-                      name="squareFeet"
-                      value={propertyData.squareFeet}
-                      onChange={handleChange}
-                      className={errors.squareFeet ? 'form-control error' : 'form-control'}
-                      placeholder="Enter area in sq ft"
-                    />
-                    {errors.squareFeet && <p className="error-message">{errors.squareFeet}</p>}
-                  </div>
-
-                  <div className="form-group">
-                    <label htmlFor="rate">Rate (per sq ft)</label>
-                    <input
-                      type="number"
-                      id="rate"
-                      name="rate"
-                      value={propertyData.rate}
-                      onChange={handleChange}
-                      className={errors.rate ? 'form-control error' : 'form-control'}
-                      placeholder="Enter rate per sq ft"
-                    />
-                    {errors.rate && <p className="error-message">{errors.rate}</p>}
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="description">Description</label>
+                  <label htmlFor="address">Address</label>
                   <textarea
-                    id="description"
-                    name="description"
-                    value={propertyData.description}
+                    id="address"
+                    name="address"
+                    value={propertyData.address}
                     onChange={handleChange}
-                    className="form-control"
-                    placeholder="Describe your property"
-                    rows="4"
-                  ></textarea>
+                    className={errors.address ? 'form-control error' : 'form-control'}
+                    placeholder="Enter complete address"
+                    rows="3"
+                    required
+                  />
+                  {errors.address && <p className="error-message">{errors.address}</p>}
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="price">Price (in ₹)</label>
+                  <input
+                    type="number"
+                    id="price"
+                    name="price"
+                    value={propertyData.price}
+                    onChange={handleChange}
+                    className={errors.price ? 'form-control error' : 'form-control'}
+                    placeholder="Enter price"
+                    required
+                  />
+                  {errors.price && <p className="error-message">{errors.price}</p>}
                 </div>
 
                 <div className="form-group">
@@ -498,12 +468,11 @@ function AddProperty() {
                         className="form-control"
                       >
                         <option value="">Select document type</option>
-                        <option value="Title Deed">Title Deed</option>
-                        <option value="Land Survey">Land Survey</option>
-                        <option value="Property Tax Receipt">Property Tax Receipt</option>
-                        <option value="Ownership Certificate">Ownership Certificate</option>
-                        <option value="Zoning Approval">Zoning Approval</option>
-                        <option value="Other">Other</option>
+                        <option value="Mother Deed">Mother Deed (Previous Title Documents)</option>
+                        <option value="Encumbrance Certificate">Encumbrance Certificate (EC)</option>
+                        <option value="Tax Receipt">Tax Paid Receipts</option>
+                        <option value="Patta Chitta">Patta / Chitta Copy</option>
+                        <option value="Layout Plan">Approved Layout Plan</option>
                       </select>
                     </div>
                     

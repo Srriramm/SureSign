@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import './BuyerPropertyDetails.css';
-import { getToken, getAuthHeaders } from '../../utils/authUtils';
+import { getToken } from '../../utils/authUtils';
+import LawyerVerification from './LawyerVerification';
 
 function BuyerPropertyDetails() {
   const { propertyId } = useParams();
@@ -20,7 +21,7 @@ function BuyerPropertyDetails() {
   const [checkingAccess, setCheckingAccess] = useState(false);
 
   // Define checkDocumentAccess outside useEffect so it can be reused
-  const checkDocumentAccess = async () => {
+  const checkDocumentAccess = useCallback(async () => {
     try {
       setCheckingAccess(true);
       const token = getToken('buyer');
@@ -41,13 +42,27 @@ function BuyerPropertyDetails() {
       
       const accessData = await response.json();
       console.log('Document access data:', accessData);
+      
+      // If this is the first time getting access, show a notification about the download limit
+      if (accessData.has_access && (!documentAccess || !documentAccess.has_access)) {
+        setNotification({
+          type: 'info',
+          message: 'You now have access to property documents. Please note that each document can be downloaded a maximum of 3 times.'
+        });
+        
+        // Clear notification after 8 seconds
+        setTimeout(() => {
+          setNotification(null);
+        }, 8000);
+      }
+      
       setDocumentAccess(accessData);
     } catch (err) {
       console.error('Error checking document access:', err);
     } finally {
       setCheckingAccess(false);
     }
-  };
+  }, [propertyId]);
 
   useEffect(() => {
     // Check if the user is logged in as a buyer
@@ -83,24 +98,6 @@ function BuyerPropertyDetails() {
         
         const propertyData = await propertyResponse.json();
         
-        // Fetch seller details if available
-        if (propertyData.seller_id) {
-          try {
-            const sellerResponse = await fetch(`http://localhost:8000/buyer/seller/${propertyData.seller_id}`, {
-              headers: {
-                'Authorization': `Bearer ${token}`
-              }
-            });
-            
-            if (sellerResponse.ok) {
-              const sellerData = await sellerResponse.json();
-              propertyData.seller_contact = sellerData.email || sellerData.phone || sellerData.contact;
-            }
-          } catch (sellerErr) {
-            console.warn('Could not fetch seller details:', sellerErr);
-          }
-        }
-        
         console.log('Property data:', propertyData);
         
         setProperty(propertyData);
@@ -114,7 +111,7 @@ function BuyerPropertyDetails() {
 
     fetchPropertyDetails();
     checkDocumentAccess();
-  }, [propertyId, navigate]);
+  }, [propertyId, navigate, checkDocumentAccess]);
 
   const handleGoBack = () => {
     navigate('/properties');
@@ -294,6 +291,19 @@ function BuyerPropertyDetails() {
           return;
         }
         
+        // Check download limits
+        const limits = documentAccess.document_limits || [];
+        const docLimit = limits.find(limit => limit.document_index === index);
+        
+        if (docLimit && docLimit.remaining_downloads <= 0) {
+          // Show notification that downloads are exhausted
+          setNotification({
+            type: 'error',
+            message: 'Download limit reached for this document. Contact seller for more access.'
+          });
+          return;
+        }
+        
         // Create URL with token parameter
         const downloadUrl = `http://localhost:8000/buyer/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}`;
         
@@ -310,6 +320,21 @@ function BuyerPropertyDetails() {
         setTimeout(() => {
           setNotification(null);
         }, 3000);
+        
+        // Refresh document access data after download to update counters
+        setTimeout(() => {
+          checkDocumentAccess();
+        }, 2000);
+      };
+      
+      // Helper function to get download limits for a document
+      const getDocumentLimit = (index) => {
+        const limits = documentAccess.document_limits || [];
+        return limits.find(limit => limit.document_index === index) || {
+          max_downloads: 3,
+          remaining_downloads: 3,
+          download_count: 0
+        };
       };
       
       return (
@@ -318,20 +343,30 @@ function BuyerPropertyDetails() {
             You have access to view these documents until {new Date(documentAccess.access_expires_on).toLocaleString()}
           </div>
           <div className="document-items">
-            {documentAccess.documents.map((doc, index) => (
+            {documentAccess.documents.map((doc, index) => {
+              const docLimit = getDocumentLimit(index);
+              const isLimitReached = docLimit.remaining_downloads <= 0;
+              
+              return (
               <div 
                 key={index} 
-                className="document-item"
+                  className={`document-item ${isLimitReached ? 'limit-reached' : ''}`}
                 onClick={(e) => handleDocumentClick(index, e)}
-                style={{ cursor: 'pointer' }}
+                  style={{ cursor: isLimitReached ? 'not-allowed' : 'pointer' }}
               >
                 <div className="document-icon">📄</div>
                 <div className="document-info">
                   <span className="document-title">{doc.type || `Document ${index + 1}`}</span>
                   <span className="document-filename">{doc.filename || `document-${index + 1}`}</span>
+                    <span className={`download-limit-badge ${isLimitReached ? 'limit-reached' : ''}`}>
+                      {isLimitReached ? 
+                        'Download limit reached' : 
+                        `${docLimit.remaining_downloads}/${docLimit.max_downloads} downloads remaining`}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       );
@@ -490,7 +525,7 @@ function BuyerPropertyDetails() {
             <div className="main-image-container">
               <img 
                 src={mainImageUrl} 
-                alt={property.location || property.area || "Property"} 
+                alt={property.address || "Property"} 
                 className="main-property-image"
                 onError={handleImageError}
               />
@@ -517,21 +552,21 @@ function BuyerPropertyDetails() {
           
           {/* Property info section */}
           <div className="property-info-section">
-            <h2>{property.location || property.area || 'Unknown Location'}</h2>
+            <h2>{property.address || 'Unknown Location'}</h2>
             
             <div className="property-reference">
-              <span>Reference #: {property.reference_number || property.id || property._id}</span>
+              <span>Survey Number: {property.survey_number || property.id}</span>
             </div>
             
             <div className="property-details-grid compact">
               <div className="property-detail-item">
-                <span className="detail-label">Property Type</span>
-                <span className="detail-value">{property.property_type || 'Not specified'}</span>
+                <span className="detail-label">Survey Number</span>
+                <span className="detail-value">{property.survey_number || 'Not specified'}</span>
               </div>
               
               <div className="property-detail-item">
-                <span className="detail-label">Area</span>
-                <span className="detail-value">{property.square_feet || property.area_sq_ft || 'N/A'} sq.ft</span>
+                <span className="detail-label">Plot Size</span>
+                <span className="detail-value">{property.plot_size || 'N/A'} sq.ft</span>
               </div>
               
               <div className="property-detail-item">
@@ -540,13 +575,8 @@ function BuyerPropertyDetails() {
               </div>
               
               <div className="property-detail-item">
-                <span className="detail-label">Area/Location</span>
-                <span className="detail-value">{property.area || 'Not specified'}</span>
-              </div>
-              
-              <div className="property-detail-item full-width description-container">
-                <span className="detail-label">Description</span>
-                <span className="detail-value description">{property.description || 'No description available'}</span>
+                <span className="detail-label">Address</span>
+                <span className="detail-value">{property.address || 'Not specified'}</span>
               </div>
             </div>
             
@@ -590,6 +620,17 @@ function BuyerPropertyDetails() {
                 {renderDocumentsSection()}
               </div>
             </div>
+            
+            {/* Add Legal Verification Section */}
+            {documentAccess && documentAccess.has_access && (
+              <LawyerVerification 
+                propertyId={propertyId}
+                onVerificationUpdated={() => {
+                  // Refresh document access status if needed
+                  checkDocumentAccess();
+                }}
+              />
+            )}
             
             <div className="status-timestamp-container">
               <div className="property-status">

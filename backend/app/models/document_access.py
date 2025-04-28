@@ -28,4 +28,22 @@ class DocumentAccessLimit(BaseModel):
     first_access: Optional[datetime] = None
     last_access: Optional[datetime] = None
     expiry_date: Optional[datetime] = None
-    is_expired: bool = False 
+    is_expired: bool = False
+
+class LawyerVerification(BaseModel):
+    """Model for lawyer verification of property documents"""
+    id: Optional[str] = None
+    property_id: str
+    buyer_id: str
+    lawyer_name: str
+    lawyer_email: str
+    lawyer_phone: str
+    access_token: Optional[str] = None
+    token_expiry: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: Optional[datetime] = None
+    verification_status: str = "pending"  # pending, verified, issues_found
+    verification_notes: Optional[str] = None
+    issues_details: Optional[str] = None
+    is_active: bool = True  # To deactivate old verifications if buyer changes lawyer
+    documents_accessed: List[int] = []  # List of document indices that have been accessed 

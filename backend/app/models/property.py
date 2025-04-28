@@ -16,20 +16,17 @@ class PropertyModel(BaseModel):
     
     seller_id: str = Field(..., description="ID of the seller listing the property")
     
-    # Added more descriptive fields
-    property_type: str = Field(..., description="Type of the property (e.g., apartment, villa, plot, etc.)")
-    title: str = Field(..., min_length=3, max_length=100, description="Title of the property listing")
-    description: Optional[str] = Field(None, min_length=10, description="Detailed description of the property")
+    # Land-specific fields
+    survey_number: str = Field(..., description="Survey number of the land")
+    plot_size: str = Field(..., description="Size of the plot in square feet")
+    address: str = Field(..., description="Complete address of the land")
+    price: str = Field(..., description="Price of the land in rupees")
     
-    # Validate and convert numeric fields to strings
-    square_feet: str = Field(..., min_length=1, description="Total area of the property in square feet", 
-                              validate_default=BeforeValidator(convert_to_str), alias="area_sq_ft")
-    price: str = Field(..., min_length=1, description="Price of the property", 
-                       validate_default=BeforeValidator(convert_to_str))
-    
-    # Enhanced location fields
-    location: Optional[str] = Field(None, min_length=3, description="Detailed location of the property")
-    area: Optional[str] = Field(None, description="Broader area or neighborhood")
+    # Document types for land
+    document_types: List[str] = Field(
+        default_factory=list,
+        description="Types of documents uploaded (Mother Deed, EC, Tax Receipt, etc.)"
+    )
     
     # Media and document management
     images: List[str] = Field(default_factory=list, description="List of encrypted image URLs")

@@ -806,21 +806,59 @@ footer p {
 .request-info {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  flex-grow: 1;
+  gap: 4px;
 }
 
 .request-property {
+  font-weight: bold;
+  color: #1a73e8;
   cursor: pointer;
-  color: #1e40af;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .request-property:hover {
   text-decoration: underline;
 }
 
-.request-date, 
+.request-property-thumbnail {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-left: 8px;
+  border: 1px solid #e0e0e0;
+}
+
+.request-property-thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.request-property-details {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.property-address {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.property-price {
+  font-weight: 600;
+  color: #2e7d32;
+}
+
 .request-buyer {
-  color: #64748b;
   font-size: 0.9rem;
 }
 

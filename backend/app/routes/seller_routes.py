@@ -220,28 +220,29 @@ async def list_properties(token_payload = Depends(AuthHandler.auth_wrapper)):
 
 @router.post("/property")
 async def create_property_listing(
-    property_type: str = Form(...),
-    square_feet: float = Form(...),
+    survey_number: str = Form(...),
+    plot_size: float = Form(...),
+    address: str = Form(...),
     price: float = Form(...),
-    area: str = Form(...),
-    description: Optional[str] = Form(None),
-    location: Optional[str] = Form(None),
     images: List[UploadFile] = File(...),
     documents: List[UploadFile] = File(...),
     document_types: List[str] = Form(...),
     token_payload = Depends(AuthHandler.auth_wrapper)
 ):
     """
-    Create a new property listing
+    Create a new land property listing with required documents:
+    - Mother Deed (previous title documents)
+    - Encumbrance Certificate (EC)
+    - Tax paid receipts
+    - Patta / Chitta copy (if applicable)
+    - Approved layout plan (if applicable)
     """
     return await property_controller.create_property_listing(
         token_payload, 
-        property_type=property_type,
-        square_feet=square_feet,
+        survey_number=survey_number,
+        plot_size=plot_size,
+        address=address,
         price=price,
-        area=area,
-        description=description,
-        location=location,
         images=images, 
         documents=documents,
         document_types=document_types
@@ -657,175 +658,6 @@ async def get_property_document(
     except Exception as e:
         logging.error(f"Error serving property document: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to retrieve document")
-    finally:
-        if azure_storage:
-            await azure_storage.close()
-
-@router.get("/property-document/{property_id}/{document_index}/original")
-async def get_original_property_document(
-    property_id: str = Path(..., description="ID of the property"),
-    document_index: int = Path(..., description="Index of the document in the property documents array"),
-    token: str = Query(..., description="JWT token for authentication"),
-    db=Depends(get_database)
-):
-    """
-    Get the original (unencrypted) property document for sellers
-    """
-    azure_storage = None
-    
-    try:
-        # Verify the seller's token
-        try:
-            seller = AuthHandler.decode_token(token)
-            if not seller or seller.get('type') != 'seller':
-                raise HTTPException(status_code=401, detail="Invalid or expired token")
-        except Exception as e:
-            logging.error(f"Token verification failed: {str(e)}")
-            raise HTTPException(status_code=401, detail="Invalid or expired token")
-        
-        # Get the property from the database and verify owner
-        property_data = await db.properties.find_one({
-            "id": property_id,
-            "seller_id": seller['sub']
-        })
-        
-        if not property_data:
-            raise HTTPException(status_code=404, detail="Property not found or you don't have permission")
-        
-        # Check if the document exists at the specified index
-        try:
-            document_index = int(document_index)  # Ensure it's an integer
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Document index must be an integer")
-            
-        if not property_data.get('documents') or document_index >= len(property_data['documents']):
-            raise HTTPException(status_code=404, detail="Document not found")
-        
-        property_doc = property_data['documents'][document_index]
-        logging.info(f"Retrieving original document for seller: {json.dumps(property_doc, default=str)}")
-        
-        # Initialize Azure storage
-        azure_storage = AzureStorageService()
-        
-        # Get the original document URL
-        original_url = property_doc.get('original_url')
-        if not original_url:
-            raise HTTPException(status_code=404, detail="Original document URL not found")
-        
-        # Get document name from property record
-        document_name = property_doc.get('document_name')
-        if not document_name:
-            # Extract from URL if not in metadata
-            document_name = original_url.split('/')[-1].split('?')[0]
-            document_name = urllib.parse.unquote(document_name)
-        
-        # Use the designated property documents container
-        container_name = azure_storage.container_property_docs
-        
-        # Determine the path within the container - should be seller_id/property_id/documents/document_name
-        seller_id = seller['sub']
-        blob_path = f"{seller_id}/{property_id}/documents/{document_name}"
-        
-        logging.info(f"Attempting to download original document: container={container_name}, blob_path={blob_path}")
-        
-        # Download the document
-        try:
-            document_content = await azure_storage.download_file(
-                container_name=container_name,
-                blob_path=blob_path
-            )
-            
-            if not document_content:
-                raise HTTPException(status_code=404, detail="Document not found in Azure storage")
-            
-            # Determine content type
-            content_type = property_doc.get('content_type', 'application/octet-stream')
-            if not content_type or content_type == 'application/octet-stream':
-                if document_name.lower().endswith('.pdf'):
-                    content_type = 'application/pdf'
-                elif document_name.lower().endswith(('.jpg', '.jpeg')):
-                    content_type = 'image/jpeg'
-                elif document_name.lower().endswith('.png'):
-                    content_type = 'image/png'
-            
-            # Return the document
-            return Response(
-                content=document_content,
-                media_type=content_type,
-                headers={
-                    "Content-Disposition": f"attachment; filename=\"{document_name}\"",
-                    "Content-Type": content_type,
-                    "Content-Length": str(len(document_content)),
-                    "Cache-Control": "no-cache"
-                }
-            )
-            
-        except Exception as e:
-            logging.error(f"Error downloading original document: {str(e)}")
-            
-            # Alternative approach - try to extract blob name directly from URL
-            try:
-                logging.info(f"Attempting alternative method using URL: {original_url}")
-                
-                # Parse the URL to extract blob path
-                url_parts = original_url.split('/')
-                blob_name = None
-                
-                # Look for the document name in the URL
-                for i, part in enumerate(url_parts):
-                    if part == "documents" and i < len(url_parts) - 1:
-                        blob_name = url_parts[i+1].split('?')[0]  # Remove SAS token if present
-                        break
-                
-                if not blob_name:
-                    # Just use the last part as the blob name
-                    blob_name = url_parts[-1].split('?')[0]  # Remove SAS token if present
-                
-                # URL decode the blob name
-                blob_name = urllib.parse.unquote(blob_name)
-                
-                # Try to download using the extracted blob name
-                blob_path = f"{seller_id}/{property_id}/documents/{blob_name}"
-                logging.info(f"Attempting to download with alternative path: {blob_path}")
-                
-                document_content = await azure_storage.download_file(
-                    container_name=container_name,
-                    blob_path=blob_path
-                )
-                
-                if document_content:
-                    # Determine content type
-                    content_type = property_doc.get('content_type', 'application/octet-stream')
-                    if not content_type or content_type == 'application/octet-stream':
-                        if blob_name.lower().endswith('.pdf'):
-                            content_type = 'application/pdf'
-                        elif blob_name.lower().endswith(('.jpg', '.jpeg')):
-                            content_type = 'image/jpeg'
-                        elif blob_name.lower().endswith('.png'):
-                            content_type = 'image/png'
-                    
-                    # Return the document
-                    return Response(
-                        content=document_content,
-                        media_type=content_type,
-                        headers={
-                            "Content-Disposition": f"attachment; filename=\"{blob_name}\"",
-                            "Content-Type": content_type,
-                            "Content-Length": str(len(document_content)),
-                            "Cache-Control": "no-cache"
-                        }
-                    )
-            except Exception as inner_e:
-                logging.error(f"Alternative method failed: {str(inner_e)}")
-            
-            # If we get here, both methods failed
-            raise HTTPException(status_code=404, detail="Could not download the document from storage")
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Error in get_original_property_document: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         if azure_storage:
             await azure_storage.close()

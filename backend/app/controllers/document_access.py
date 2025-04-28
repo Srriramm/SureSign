@@ -96,12 +96,18 @@ class SecureDocumentController:
                 {'_id': limit_record['_id']},
                 {'$set': {'is_expired': True}}
             )
-            return False
+            raise HTTPException(
+                status_code=403,
+                detail="Your document access period has expired. Please request new access from the seller."
+            )
         
         # Check download count
         if limit.download_count >= limit.max_downloads:
             logging.warning(f"Buyer {buyer_id} has exceeded download limit for document {property_id}/{document_index}")
-            return False
+            raise HTTPException(
+                status_code=403,
+                detail=f"Download limit exceeded. You have downloaded this document {limit.download_count} times, which is the maximum allowed (limit: {limit.max_downloads})."
+            )
         
         # Update download count and last access
         await access_limits_collection.update_one(
@@ -224,12 +230,8 @@ class SecureDocumentController:
         Process document with security features and track access
         Returns: (secured_content, metadata)
         """
-        # Check access limits
-        if not await self.check_access_limits(buyer_id, property_id, document_index):
-            raise HTTPException(
-                status_code=403,
-                detail="Document access limit exceeded or expired"
-            )
+        # Check access limits (now throws exceptions directly)
+        await self.check_access_limits(buyer_id, property_id, document_index)
         
         # Apply security features
         try:

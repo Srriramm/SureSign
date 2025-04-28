@@ -5,7 +5,6 @@ import HomePage from './components/General/HomePage';
 import ListProperties from './components/SellerFlow/ListProperties';
 import AddProperty from './components/SellerFlow/AddProperty';
 import UserLogin from './components/General/UserLogin';
-import UserRegistration from './components/General/UserRegistration';
 import RegistrationRouter from './components/General/RegistrationRouter';
 import EditProfile from './components/SellerFlow/EditProfile';
 import PropertyDetails from './components/SellerFlow/PropertyDetails';
@@ -15,6 +14,7 @@ import BuyerPropertyDetails from './components/BuyerFlow/BuyerPropertyDetails';
 import EditBuyerProfile from './components/BuyerFlow/EditBuyerProfile';
 import ProtectedRoute from './components/Auth/ProtectedRoute';
 import DocumentRequests from './components/SellerFlow/DocumentRequests';
+import LawyerVerificationPage from './components/LawyerFlow/LawyerVerificationPage';
 
 function App() {
   return (
@@ -89,6 +89,8 @@ function App() {
               </ProtectedRoute>
             }
           />
+          {/* Lawyer Verification Route */}
+          <Route path="/lawyer/verify/:propertyId" element={<LawyerVerificationPage />} />
       </Routes>
     </Router>
   );

@@ -180,18 +180,16 @@ class PropertyListingController:
 
     async def create_property_listing(
         self, token_payload, 
-        property_type: str, 
-        square_feet: float, 
+        survey_number: str, 
+        plot_size: float, 
+        address: str, 
         price: float, 
-        area: str,
-        description: Optional[str] = None,
-        location: Optional[str] = None,
         images: List[UploadFile] = None,
         documents: List[UploadFile] = None,
         document_types: List[str] = None
     ):
         """
-        Create a new property listing in the properties collection
+        Create a new land property listing in the properties collection
         """
         db = await get_database()
         
@@ -220,12 +218,10 @@ class PropertyListingController:
             property_listing = {
                 'id': unique_property_id,
                 'seller_id': token_payload['sub'],
-                'property_type': property_type,
-                'square_feet': square_feet,
+                'survey_number': survey_number,
+                'plot_size': plot_size,
+                'address': address,
                 'price': price,
-                'area': area,
-                'description': description,
-                'location': location,
                 'images': encrypted_image_urls,
                 'documents': document_metadata_list,
                 'document_hashes': document_hashes,

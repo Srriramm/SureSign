@@ -10,10 +10,7 @@ function PropertyDetails() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
-  const [sellerData, setSellerData] = useState(null);
   const [documentsVisible, setDocumentsVisible] = useState(false);
-  const [documentRequests, setDocumentRequests] = useState([]);
-  const [unlockingDocuments, setUnlockingDocuments] = useState(false);
   const [notification, setNotification] = useState({ message: '', type: '' });
   const [isDownloading, setIsDownloading] = useState(false);
 
@@ -61,7 +58,6 @@ function PropertyDetails() {
 
         const sellerData = await sellerResponse.json();
         console.log('Seller data:', sellerData);
-        setSellerData(sellerData);
         
         // Directly fetch the property details from the property endpoint
         const propertyResponse = await fetch(`http://localhost:8000/seller/property/${propertyId}`, {
@@ -130,14 +126,6 @@ function PropertyDetails() {
     console.log('Image clicked:', index);
     setSelectedImageIndex(index);
   };
-
-  const getImageUrl = (image, index) => {
-    // Add debugging to understand what image data is available
-    console.log(`Getting image URL for index ${index}:`, image);
-    
-    // Use the public-property-image endpoint for better compatibility
-    return `http://localhost:8000/seller/public-property-image/${propertyId}/${index}`;
-  };
   
   const getPublicImageUrl = (index) => {
     // Use the public-property-image endpoint that doesn't require authentication
@@ -145,72 +133,16 @@ function PropertyDetails() {
     return `http://localhost:8000/seller/public-property-image/${propertyId}/${index}`;
   };
 
-  const getDocumentUrl = (doc, index) => {
-    // Log document data for debugging
-    console.log('Document data:', doc, 'at index:', index);
-    
-    // Handle different data formats
-    if (!doc) {
-      console.error('Document is undefined or null');
-      return '#'; // Return a placeholder URL that won't cause navigation
-    }
-    
-    // Get token for authentication
-    const token = localStorage.getItem('token') || localStorage.getItem('seller_token');
-    console.log('Token for document download:', token ? 'Token found' : 'No token');
-    
-    if (!token) {
-      console.error('No token found for document download');
-      return '#';
-    }
-    
-    // Generate the document URL with the token as a query parameter
-    // Make sure to encode the token properly and use a direct URL format
-    return `http://localhost:8000/seller/property-document/${propertyId}/${index}?token=${encodeURIComponent(token)}`;
-  };
-
-  // Add error handling for token expiration in document operations
-  const handleDocumentOperation = async (operation) => {
-    try {
-      const token = getToken('seller');
-      if (!token) {
-        navigate('/login/seller');
-        return;
-      }
-
-      const response = await operation(token);
-      
-      if (!response.ok) {
-        if (response.status === 401) {
-          // Token has expired
-          console.error('Token has expired');
-          clearAuthData('seller');
-          navigate('/login/seller');
-          return;
-        }
-        throw new Error('Operation failed');
-      }
-      
-      return response;
-    } catch (err) {
-      console.error('Error in document operation:', err);
-      throw err;
-    }
-  };
-
-  // Update document visibility toggle to handle token expiration
+  // Toggle document visibility for the property documents section
   const toggleDocumentVisibility = async () => {
     console.log('Toggle document visibility clicked');
     console.log('Current visibility state:', documentsVisible);
     
     try {
-      setUnlockingDocuments(true);
       setDocumentsVisible(!documentsVisible);
     } catch (err) {
       console.error('Error toggling document visibility:', err);
       setError('Failed to toggle document visibility');
-    } finally {
-      setUnlockingDocuments(false);
     }
   };
 
@@ -484,7 +416,7 @@ function PropertyDetails() {
             <div className="main-image-container">
               <img 
                 src={mainImageUrl} 
-                alt={property.location || property.area || "Property"} 
+                alt={property.address || "Property"} 
                 className="main-property-image"
                 onError={handleImageError}
               />
@@ -512,36 +444,31 @@ function PropertyDetails() {
           
           {/* Property info section */}
           <div className="property-info-section">
-            <h2>{property.location || property.area || 'Unknown Location'}</h2>
+            <h2>{property.address || 'Unknown Location'}</h2>
             
             <div className="property-reference">
-              <span>Reference #: {property.reference_number || property.id || property._id}</span>
+              <span>Survey Number: {property.survey_number || property.id}</span>
             </div>
             
             <div className="property-details-grid">
               <div className="property-detail-item">
-                <span className="detail-label">Property Type</span>
-                <span className="detail-value">{property.property_type || 'Not specified'}</span>
+                <span className="detail-label">Survey Number</span>
+                <span className="detail-value">{property.survey_number || 'Not specified'}</span>
               </div>
               
               <div className="property-detail-item">
-                <span className="detail-label">Area</span>
-                <span className="detail-value">{property.square_feet || 'N/A'} sq.ft</span>
+                <span className="detail-label">Plot Size</span>
+                <span className="detail-value">{property.plot_size || 'N/A'} sq.ft</span>
               </div>
               
               <div className="property-detail-item">
                 <span className="detail-label">Price</span>
-                <span className="detail-value">₹{property.price || '0'}/sq.ft</span>
+                <span className="detail-value">₹{property.price || '0'}</span>
               </div>
               
               <div className="property-detail-item">
-                <span className="detail-label">Area/Location</span>
-                <span className="detail-value">{property.area || 'Not specified'}</span>
-              </div>
-              
-              <div className="property-detail-item full-width">
-                <span className="detail-label">Description</span>
-                <span className="detail-value description">{property.description || 'No description available'}</span>
+                <span className="detail-label">Address</span>
+                <span className="detail-value">{property.address || 'Not specified'}</span>
               </div>
             </div>
             

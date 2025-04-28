@@ -57,7 +57,9 @@ function BuyerProperties() {
         (property.property_type && property.property_type.toLowerCase().includes(searchTermLower)) ||
         (property.description && property.description.toLowerCase().includes(searchTermLower)) ||
         (property.title && property.title.toLowerCase().includes(searchTermLower)) ||
-        (property.location && property.location.toLowerCase().includes(searchTermLower))
+        (property.location && property.location.toLowerCase().includes(searchTermLower)) ||
+        (property.address && property.address.toLowerCase().includes(searchTermLower)) ||
+        (property.survey_number && property.survey_number.toString().includes(searchTermLower))
       );
     });
 
@@ -80,6 +82,28 @@ function BuyerProperties() {
   const handleImageError = (e) => {
     console.log('Image failed to load, using placeholder');
     e.target.src = '/assets/property-placeholder.jpg';
+  };
+
+  // Format price to display properly
+  const formatPrice = (price) => {
+    if (!price) return 'N/A';
+    return `₹ ${Number(price).toLocaleString()}`;
+  };
+
+  // Helper to display the most appropriate property name/location
+  const getPropertyTitle = (property) => {
+    return property.address || 
+           property.location || 
+           property.area || 
+           (property.survey_number ? `Plot ${property.survey_number}` : 'Property');
+  };
+
+  // Helper to get appropriate property size
+  const getPropertySize = (property) => {
+    return property.plot_size || 
+           property.square_feet || 
+           property.area_sq_ft || 
+           'N/A';
   };
 
   if (loading) {
@@ -159,19 +183,46 @@ function BuyerProperties() {
                 <div className="property-image">
                   <img
                     src={getImageUrl(property)}
-                    alt={`${property.title || 'Property'}`}
+                    alt={getPropertyTitle(property)}
                     onError={handleImageError}
                   />
                 </div>
                 <div className="property-details">
-                  <h3 className="property-address">{property.title || property.location || 'Property'}</h3>
-                  <div className="property-type">{property.property_type || 'N/A'}</div>
-                  <div className="property-price">₹ {property.price ? Number(property.price).toLocaleString() : 'N/A'}</div>
-                  <div className="property-area">
-                    <span className="area-label">Area:</span> {property.area || 'N/A'}
+                  <h3 className="property-title">{getPropertyTitle(property)}</h3>
+                  
+                  <div className="property-info-grid">
+                    <div className="property-info-item">
+                      <span className="info-label">Type:</span>
+                      <span className="info-value">{property.property_type || 'Land'}</span>
+                    </div>
+                    <div className="property-info-item">
+                      <span className="info-label">Area:</span>
+                      <span className="info-value">{getPropertySize(property)} sq.ft</span>
+                    </div>
+                    <div className="property-info-item">
+                      <span className="info-label">Price:</span>
+                      <span className="info-value">{formatPrice(property.price)}</span>
+                    </div>
+                    <div className="property-info-item">
+                      <span className="info-label">Survey #:</span>
+                      <span className="info-value">{property.survey_number || 'N/A'}</span>
+                    </div>
+                    <div className="property-info-item">
+                      <span className="info-label">Listed:</span>
+                      <span className="info-value">{property.created_at ? new Date(property.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'numeric', day: 'numeric' }) : 'N/A'}</span>
+                    </div>
+                    <div className="property-info-item">
+                      <span className="info-label">Status:</span>
+                      <span className="info-value">
+                        <span className={`status-badge ${(property.status || 'live').toLowerCase()}`}>
+                          {property.status || 'LIVE'}
+                        </span>
+                      </span>
+                    </div>
                   </div>
-                  <div className="property-size">
-                    <span className="size-label">Size:</span> {property.square_feet || property.area_sq_ft || 'N/A'} sq.ft
+                  
+                  <div className="property-actions">
+                    <button className="view-details-btn">View Details</button>
                   </div>
                 </div>
               </div>

@@ -131,6 +131,28 @@ function BuyerDashboard() {
     e.target.src = '/assets/property-placeholder.jpg';
   };
 
+  // Format price to display properly
+  const formatPrice = (price) => {
+    if (!price) return 'N/A';
+    return `₹ ${Number(price).toLocaleString()}`;
+  };
+
+  // Helper to display the most appropriate property name/location
+  const getPropertyTitle = (property) => {
+    return property.address || 
+           property.location || 
+           property.area || 
+           (property.survey_number ? `Plot ${property.survey_number}` : 'Property');
+  };
+
+  // Helper to get appropriate property size
+  const getPropertySize = (property) => {
+    return property.plot_size || 
+           property.square_feet || 
+           property.area_sq_ft || 
+           'N/A';
+  };
+
   if (loading) {
     return (
       <div className="loading-container">
@@ -258,29 +280,52 @@ function BuyerDashboard() {
             )}
           </div>
         ) : (
-          <div className="properties-grid">
+          <div className="properties-list">
             {filteredProperties.map(property => (
-              <div 
-                key={property.id} 
-                className="property-card" 
-                onClick={() => handlePropertyClick(property.id)}
-              >
-                <div className="property-image">
-                  <img
-                    src={getImageUrl(property)}
-                    alt={`${property.title || 'Property'}`}
-                    onError={handleImageError}
-                  />
-                </div>
-                <div className="property-details">
-                  <h3 className="property-address">{property.title || property.location || 'Property'}</h3>
-                  <div className="property-type">{property.property_type || 'N/A'}</div>
-                  <div className="property-price">₹ {property.price ? Number(property.price).toLocaleString() : 'N/A'}</div>
-                  <div className="property-area">
-                    <span className="area-label">Area:</span> {property.area || 'N/A'}
+              <div key={property.id} className="property-card">
+                <div className="property-details-wrapper">
+                  <div className="property-images">
+                    <img
+                      src={getImageUrl(property)}
+                      alt={getPropertyTitle(property)}
+                      className="property-image"
+                      onError={handleImageError}
+                    />
                   </div>
-                  <div className="property-size">
-                    <span className="size-label">Size:</span> {property.square_feet || property.area_sq_ft || 'N/A'} sq.ft
+                  <div className="property-details">
+                    <h3 className="property-location">{getPropertyTitle(property)}</h3>
+                    <div className="property-meta">
+                      <div className="property-meta-item">
+                        <span className="meta-label">Type:</span>
+                        <span className="meta-value">{property.property_type || 'Land'}</span>
+                      </div>
+                      <div className="property-meta-item">
+                        <span className="meta-label">Area:</span>
+                        <span className="meta-value">{getPropertySize(property)} sq.ft</span>
+                      </div>
+                      <div className="property-meta-item">
+                        <span className="meta-label">Price:</span>
+                        <span className="meta-value">{formatPrice(property.price)}</span>
+                      </div>
+                      <div className="property-meta-item">
+                        <span className="meta-label">Survey #:</span>
+                        <span className="meta-value">{property.survey_number || 'N/A'}</span>
+                      </div>
+                      <div className="property-meta-item">
+                        <span className="meta-label">Listed:</span>
+                        <span className="meta-value">{property.created_at ? new Date(property.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A'}</span>
+                      </div>
+                      <div className="property-meta-item">
+                        <span className="meta-label">Status:</span>
+                        <span className={`status-badge ${(property.status || 'live').toLowerCase()}`}>
+                          {property.status || 'LIVE'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="property-buttons">
+                      <button className="btn btn-primary" onClick={() => handlePropertyClick(property.id)}>View Details</button>
+                      {/* Optionally add Edit button if needed */}
+                    </div>
                   </div>
                 </div>
               </div>

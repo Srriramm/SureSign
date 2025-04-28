@@ -16,3 +16,15 @@ eth-utils==1.10.0
 pytest==6.2.5
 pytest-asyncio==0.16.0
 pytest-cov==2.12.1
+
+# AI and Computer Vision Dependencies
+opencv-python 
+numpy 
+tensorflow 
+mediapipe 
+pyaudio 
+librosa 
+torch 
+transformers 
+scipy 
+sounddevice

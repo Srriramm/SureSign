@@ -12,7 +12,6 @@ function ListProperties() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selfieUrl, setSelfieUrl] = useState(null);
-  const [selfieLoading, setSelfieLoading] = useState(true);
   const [documentRequests, setDocumentRequests] = useState([]);
   const [requestsLoading, setRequestsLoading] = useState(false);
   const [notification, setNotification] = useState(null);
@@ -38,81 +37,6 @@ function ListProperties() {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, []);
-
-  // Helper function to fetch images with token
-  const fetchImageWithToken = async (url) => {
-    try {
-      const token = getToken('seller');
-      if (!token) return null;
-      
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Cache-Control': 'no-cache'
-        },
-        credentials: 'include'
-      });
-      
-      if (response.ok) {
-        // Return the URL directly since we're using authenticated URLs
-        return url;
-      }
-      return null;
-    } catch (error) {
-      console.error('Error fetching image:', error);
-      return null;
-    }
-  };
-
-  // Function to load seller selfie with retries
-  const loadSellerSelfie = async (sellerId) => {
-    if (!sellerId) return;
-    
-    setSelfieLoading(true);
-    
-    try {
-      const token = getToken('seller');
-      
-      // First get the seller data to access the actual filename
-      const sellerResponse = await fetch('http://localhost:8000/seller/get-seller', {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (sellerResponse.ok) {
-        const sellerData = await sellerResponse.json();
-        
-        // Check if the seller has selfie data in the database
-        if (sellerData.selfie_filename) {
-          // Use the actual filename from the database
-          const directUrl = `http://localhost:8000/seller/images/sec-user-kyc-images/${sellerData.selfie_filename}`;
-          console.log('Using database filename:', sellerData.selfie_filename);
-          setSelfieUrl(directUrl);
-        } else if (sellerData.selfie_url) {
-          // If there's a selfie URL but no filename, use the URL directly
-          console.log('Using direct selfie URL from database');
-          setSelfieUrl(sellerData.selfie_url);
-        } else {
-          // Fallback to constructing a URL based on ID patterns
-          const directUrl = `http://localhost:8000/seller/public-image/${sellerId}`;
-          console.log('No selfie info in database, using public image endpoint');
-          setSelfieUrl(directUrl);
-        }
-      } else {
-        // Fallback if we can't get seller data
-        setSelfieUrl(`http://localhost:8000/seller/public-image/${sellerId}`);
-      }
-    } catch (error) {
-      console.error('Error setting selfie URL:', error);
-      // Fallback to public image endpoint
-      setSelfieUrl(`http://localhost:8000/seller/public-image/${sellerId}`);
-    } finally {
-      setSelfieLoading(false);
-    }
-  };
 
   useEffect(() => {
     const fetchData = async () => {
@@ -154,8 +78,23 @@ function ListProperties() {
         const propsData = await propsResponse.json();
         console.log('Properties data from API:', propsData);
         
-        // Sort properties by date (most recent first)
+        // Add additional processing for property data
         if (Array.isArray(propsData)) {
+          // Log each property's key fields to help debug
+          propsData.forEach((property, index) => {
+            console.log(`Property ${index} (${property.id}):`, {
+              address: property.address,
+              location: property.location,
+              area: property.area,
+              survey_number: property.survey_number,
+              plot_size: property.plot_size,
+              square_feet: property.square_feet,
+              price: property.price,
+              status: property.status
+            });
+          });
+          
+          // Sort properties by date (most recent first)
           propsData.sort((a, b) => {
             const dateA = new Date(a.created_at || 0);
             const dateB = new Date(b.created_at || 0);
@@ -213,27 +152,49 @@ function ListProperties() {
               if (propertyResponse.ok) {
                 const propertyData = await propertyResponse.json();
                 request.property_details = propertyData;
+                
+                // Add additional display-friendly fields
+                request.property_title = propertyData.location || propertyData.area || 
+                                        (propertyData.survey_number ? `Plot ${propertyData.survey_number}` : 
+                                        propertyData.id || "Unknown Property");
+                
+                request.property_address = propertyData.address || propertyData.location || "No address";
+                request.property_type = propertyData.property_type || "Land";
+                request.property_price = propertyData.price || 0;
+              } else {
+                console.error('Failed to fetch property details, status:', propertyResponse.status);
+                // Set fallback property info
+                request.property_title = `Property ${request.property_id}`;
               }
             } catch (error) {
               console.error('Error fetching property details for request:', error);
+              // Set fallback property info on error
+              request.property_title = `Property ${request.property_id}`;
             }
           }
           
           // Fetch buyer details if not included
           if (!request.buyer_details && request.buyer_id) {
             try {
-              const buyerResponse = await fetch(`http://localhost:8000/seller/buyer/${request.buyer_id}`, {
-                headers: {
-                  'Authorization': `Bearer ${token}`
-                }
-              });
-              
-              if (buyerResponse.ok) {
-                const buyerData = await buyerResponse.json();
-                request.buyer_details = buyerData;
+              // Note: There's no need to fetch the full buyer profile here since
+              // the document request already includes buyer_name, buyer_email fields
+              // If name not present in request, set defaults
+              if (!request.buyer_name) {
+                request.buyer_name = 'Buyer';
               }
+              
+              // Set buyer_details from fields already in the request
+              request.buyer_details = {
+                name: request.buyer_name || 'Buyer',
+                email: request.buyer_email || '',
+                _id: request.buyer_id
+              };
+              
+              // If absolutely needed, we can fetch just the buyer image
+              // using the existing image endpoint which already works for both sellers and buyers
+              request.buyer_details.image_url = `http://localhost:8000/seller/image/${request.buyer_id}`;
             } catch (error) {
-              console.error('Error fetching buyer details for request:', error);
+              console.error('Error setting buyer details for request:', error);
             }
           }
           
@@ -348,6 +309,7 @@ function ListProperties() {
   const getImageUrl = (property) => {
     // Skip if property has no images
     if (!property || !property.images || property.images.length === 0) {
+      console.log('Property has no images:', property?.id || 'unknown');
       return '/placeholder.jpg';
     }
 
@@ -359,8 +321,16 @@ function ListProperties() {
       return '/placeholder.jpg';
     }
 
+    // Check if image contains a direct URL
+    if (image.url && typeof image.url === 'string') {
+      console.log(`Using direct URL for property ${propertyId}`);
+      return image.url;
+    }
+
     // Use the public property image endpoint
-    return `http://localhost:8000/seller/public-property-image/${propertyId}/0`;
+    const imageUrl = `http://localhost:8000/seller/public-property-image/${propertyId}/0`;
+    console.log(`Generated image URL for property ${propertyId}: ${imageUrl}`);
+    return imageUrl;
   };
 
   const formatDate = (dateString) => {
@@ -397,92 +367,33 @@ function ListProperties() {
     }
   };
 
-  // Helper function to get image URL from secure_filename
   const getImageUrlFromSecureFilename = (secure_filename) => {
-    if (!secure_filename) return '/placeholder.jpg';
-    // Return the placeholder directly since we don't use this function anymore
-    return '/placeholder.jpg';
-  };
-  
-  // Helper function to debug image loading
-  const debugImageLoading = async (url, propertyId) => {
-    try {
-      console.log(`Attempting to load image for property ${propertyId} from: ${url}`);
-      
-      // Fetch the image directly to check status
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        console.error(`Image fetch failed with status ${response.status}: ${response.statusText}`);
-        return false;
-      }
-      
-      // Check content type
-      const contentType = response.headers.get('content-type');
-      console.log(`Image content type: ${contentType}`);
-      
-      // Check content length
-      const contentLength = response.headers.get('content-length');
-      console.log(`Image size: ${contentLength} bytes`);
-      
-      // Additional checks
-      if (contentLength && parseInt(contentLength) < 100) {
-        console.warn('Image size suspiciously small, might be broken');
-      }
-      
-      if (!contentType || !contentType.startsWith('image/')) {
-        console.warn(`Content type "${contentType}" might not be a valid image`);
-      }
-      
-      console.log('Image appears to be valid and loadable');
-      return true;
-    } catch (e) {
-      console.error(`Error debugging image: ${e.message}`);
-      return false;
-    }
-  };
-
-  // Helper function to get a data URL version of an image
-  const getImageDataUrl = async (secure_filename, propertyId) => {
     if (!secure_filename) return null;
-    
-    try {
-      const response = await fetch(`http://localhost:8000/seller/property-image-data-url/${secure_filename}`);
-      if (!response.ok) {
-        console.error(`Failed to get data URL for ${secure_filename}`);
-        return null;
-      }
-      
-      const data = await response.json();
-      console.log(`Successfully loaded data URL for property ${propertyId}`);
-      return data.data_url;
-    } catch (e) {
-      console.error(`Error getting data URL: ${e.message}`);
-      return null;
-    }
-  };
-  
-  // Helper function to handle image loading with fallback to data URL
-  const handleImageLoad = async (imageElement, secure_filename, propertyId) => {
-    // Try normal image loading first
-    imageElement.src = getImageUrlFromSecureFilename(secure_filename);
-    
-    // Add error handler that will try data URL if direct loading fails
-    imageElement.onerror = async () => {
-      console.log(`Trying data URL fallback for property ${propertyId}`);
-      const dataUrl = await getImageDataUrl(secure_filename, propertyId);
-      if (dataUrl) {
-        imageElement.src = dataUrl;
-      } else {
-        imageElement.src = '/placeholder.jpg';
-      }
-    };
+    return `http://localhost:8000/seller/property-image/${secure_filename}`;
   };
 
   const handlePropertyImageError = (e, property) => {
-    console.log('Image loading error for property:', property.id);
-    e.target.onerror = null; // Prevent infinite error loops
+    console.error('Property image error:', e.target.src);
+    
+    // Fallback 1: Check if property has secure_filenames and try the first one
+    if (property.secure_filenames && property.secure_filenames.length > 0) {
+      console.log('Trying to load from secure_filenames:', property.secure_filenames[0]);
+      const secureUrl = getImageUrlFromSecureFilename(property.secure_filenames[0]);
+      e.target.src = secureUrl;
+      
+      // Add a secondary error handler
+      e.target.onerror = () => {
+        console.log('Secure filename URL also failed, using placeholder');
+        e.target.src = '/placeholder.jpg';
+        e.target.onerror = null;
+      };
+      return;
+    }
+    
+    // Final fallback: placeholder
+    console.log('No alternative images available, using placeholder');
     e.target.src = '/placeholder.jpg';
+    e.target.onerror = null;
   };
 
   if (loading) return (
@@ -546,10 +457,28 @@ function ListProperties() {
                           <li key={request.id} className="request-item">
                             <div className="request-info">
                               <div className="request-property" onClick={() => handleViewProperty(request.property_id)}>
-                                <strong>Property:</strong> {request.property_details?.title || request.property_id}
+                                <strong>Property:</strong> {request.property_title || request.property_details?.location || 
+                                  request.property_details?.area || request.property_id}
+                                {request.property_details && request.property_details.images && request.property_details.images.length > 0 && (
+                                  <div className="request-property-thumbnail">
+                                    <img 
+                                      src={`http://localhost:8000/seller/public-property-image/${request.property_id}/0`}
+                                      alt="Property Thumbnail"
+                                      onError={(e) => {e.target.src = '/placeholder.jpg'}}
+                                    />
+                                  </div>
+                                )}
                               </div>
+                              {request.property_details && (
+                                <div className="request-property-details">
+                                  <span className="property-address">{request.property_address}</span>
+                                  {request.property_details.price && (
+                                    <span className="property-price">₹{request.property_details.price.toLocaleString()}</span>
+                                  )}
+                                </div>
+                              )}
                               <div className="request-buyer">
-                                <strong>Buyer:</strong> {request.buyer_details?.name || 'Unknown Buyer'}
+                                <strong>Buyer:</strong> {request.buyer_details?.name || request.buyer_name || 'Unknown Buyer'}
                               </div>
                               <div className="request-date">
                                 <strong>Requested:</strong> {new Date(request.created_at).toLocaleDateString()}
@@ -697,28 +626,35 @@ function ListProperties() {
                     <div className="property-images">
                       <img 
                         src={getImageUrl(property) || '/placeholder.jpg'}
-                        alt={property.location || property.area || "Property"} 
+                        alt={property.location || property.area || property.address || "Property"} 
                         className="property-image"
                         onError={(e) => handlePropertyImageError(e, property)}
                       />
                     </div>
                     <div className="property-details">
                       <h3 className="property-location">
-                        {property.location || property.area || "Unknown Location"}
+                        {property.address || property.location || property.area || 
+                         (property.survey_number ? `Plot ${property.survey_number}` : "Unknown Location")}
                       </h3>
                       <div className="property-meta">
                         <div className="property-meta-item">
                           <span className="meta-label">Type:</span>
-                          <span className="meta-value">{property.property_type || "N/A"}</span>
+                          <span className="meta-value">{property.property_type || "Land"}</span>
                         </div>
                         <div className="property-meta-item">
                           <span className="meta-label">Area:</span>
-                          <span className="meta-value">{property.square_feet} sq.ft</span>
+                          <span className="meta-value">{property.plot_size || property.square_feet || "N/A"} sq.ft</span>
                         </div>
                         <div className="property-meta-item">
                           <span className="meta-label">Price:</span>
-                          <span className="meta-value">₹{property.price}/sq.ft</span>
+                          <span className="meta-value">₹{property.price?.toLocaleString() || "N/A"}</span>
                         </div>
+                        {property.survey_number && (
+                          <div className="property-meta-item">
+                            <span className="meta-label">Survey #:</span>
+                            <span className="meta-value">{property.survey_number}</span>
+                          </div>
+                        )}
                         <div className="property-meta-item">
                           <span className="meta-label">Listed:</span>
                           <span className="meta-value">{formatDate(property.created_at)}</span>

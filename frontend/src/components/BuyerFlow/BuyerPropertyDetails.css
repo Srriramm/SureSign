@@ -1482,4 +1482,47 @@ footer p {
 
 .login-btn:hover {
   background-color: #1e3a8a;
+}
+
+/* Download limit badge styles */
+.download-limit-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  margin-top: 5px;
+  font-size: 0.8rem;
+  border-radius: 12px;
+  background-color: #e7f5ff;
+  color: #0366d6;
+  font-weight: 500;
+}
+
+.download-limit-badge.limit-reached {
+  background-color: #ffdddd;
+  color: #d63031;
+}
+
+.document-item.limit-reached {
+  opacity: 0.7;
+  background-color: #f8f8f8;
+  border: 1px solid #e0e0e0;
+}
+
+.document-item.limit-reached .document-icon {
+  color: #999;
+}
+
+/* Make the document info display as a flex column for better layout */
+.document-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.document-title {
+  font-weight: 600;
+}
+
+.document-filename {
+  font-size: 0.9rem;
+  color: #555;
 } 
